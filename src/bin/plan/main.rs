@@ -12,7 +12,7 @@ mod tui_kanban;
     name = "plan",
     version,
     max_term_width = 80,
-    about = "Task management with kanban TUI — plan your work, table that thought"
+    about = "Task management with kanban TUI\nCommands can be abbreviated to their first letter (e.g., `plan b` for browse)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -29,7 +29,59 @@ struct Cli {
 
 #[derive(Parser)]
 enum Commands {
-    /// List tasks (default when no subcommand given)
+    /// Kanban board view (default)
+    #[command(alias = "k")]
+    Kanban {
+        /// Filter by status
+        #[arg(short, long, value_name = "STATUS")]
+        status: Option<String>,
+
+        /// Filter by type
+        #[arg(short = 't', long = "type", value_name = "TYPE")]
+        type_: Option<String>,
+
+        /// Filter by priority
+        #[arg(short, long, value_name = "PRIORITY")]
+        priority: Option<String>,
+
+        /// Filter by area label
+        #[arg(short, long, value_name = "AREA")]
+        area: Option<String>,
+
+        /// Search slug and body text
+        #[arg(short = 'q', long, value_name = "QUERY")]
+        search: Option<String>,
+
+        /// Sort key(s), repeatable (status, type, priority, area, slug)
+        #[arg(short = 'S', long = "sort", value_name = "FIELD")]
+        sort: Vec<String>,
+    },
+
+    /// Interactive kanban browser
+    #[command(alias = "b")]
+    Browse {
+        /// Filter by status
+        #[arg(short, long, value_name = "STATUS")]
+        status: Option<String>,
+
+        /// Filter by type
+        #[arg(short = 't', long = "type", value_name = "TYPE")]
+        type_: Option<String>,
+
+        /// Filter by priority
+        #[arg(short, long, value_name = "PRIORITY")]
+        priority: Option<String>,
+
+        /// Filter by area label
+        #[arg(short, long, value_name = "AREA")]
+        area: Option<String>,
+
+        /// Search slug and body text
+        #[arg(short = 'q', long, value_name = "QUERY")]
+        search: Option<String>,
+    },
+
+    /// List tasks in a table
     #[command(alias = "l")]
     List {
         /// Filter by status
@@ -57,33 +109,8 @@ enum Commands {
         sort: Vec<String>,
     },
 
-    /// Kanban view grouped by status
-    #[command(alias = "k")]
-    Kanban {
-        /// Filter by status
-        #[arg(short, long, value_name = "STATUS")]
-        status: Option<String>,
-
-        /// Filter by type
-        #[arg(short = 't', long = "type", value_name = "TYPE")]
-        type_: Option<String>,
-
-        /// Filter by priority
-        #[arg(short, long, value_name = "PRIORITY")]
-        priority: Option<String>,
-
-        /// Filter by area label
-        #[arg(short, long, value_name = "AREA")]
-        area: Option<String>,
-
-        /// Search slug and body text
-        #[arg(short = 'q', long, value_name = "QUERY")]
-        search: Option<String>,
-
-        /// Sort key(s), repeatable (status, type, priority, area, slug)
-        #[arg(short = 'S', long = "sort", value_name = "FIELD")]
-        sort: Vec<String>,
-    },
+    /// Initialize a .plan/ directory with schema and template
+    Init,
 
     /// Create a new task
     #[command(alias = "a")]
@@ -126,32 +153,6 @@ enum Commands {
         /// Task slug (prefix/substring match)
         slug: String,
     },
-
-    /// Interactive kanban browser
-    Tui {
-        /// Filter by status
-        #[arg(short, long, value_name = "STATUS")]
-        status: Option<String>,
-
-        /// Filter by type
-        #[arg(short = 't', long = "type", value_name = "TYPE")]
-        type_: Option<String>,
-
-        /// Filter by priority
-        #[arg(short, long, value_name = "PRIORITY")]
-        priority: Option<String>,
-
-        /// Filter by area label
-        #[arg(short, long, value_name = "AREA")]
-        area: Option<String>,
-
-        /// Search slug and body text
-        #[arg(short = 'q', long, value_name = "QUERY")]
-        search: Option<String>,
-    },
-
-    /// Initialize a .plan/ directory with schema and template
-    Init,
 
     /// Validate task frontmatter
     Lint,
@@ -245,7 +246,7 @@ fn main() {
             let ok = tasks::delete_task(&path);
             std::process::exit(if ok { 0 } else { 1 });
         }
-        Some(Commands::Tui {
+        Some(Commands::Browse {
             status,
             type_,
             priority,

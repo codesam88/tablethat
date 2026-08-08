@@ -70,7 +70,7 @@ impl Default for Config {
             root: None,
             editor: None,
             themes_dir: None,
-            default_view: "list".into(),
+            default_view: "kanban".into(),
             default_sort: vec!["priority".into(), "slug".into()],
             kanban_order: vec![
                 "idea".into(),
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn config_default_values() {
         let cfg = Config::default();
-        assert_eq!(cfg.default_view, "list");
+        assert_eq!(cfg.default_view, "kanban");
         assert_eq!(cfg.width, 80);
         assert_eq!(cfg.tui_width, 80);
         assert_eq!(cfg.pager_width, 100);

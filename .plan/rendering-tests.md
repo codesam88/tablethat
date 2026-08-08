@@ -9,21 +9,23 @@ area: testing
 
 ### Current test coverage
 
-| Module | Tests | What's covered |
-|--------|-------|---------------|
-| lib.rs | 14 | Config defaults, color conversion, status/priority mapping |
-| theme.rs | 4 | Theme discovery, fallback, field validation |
-| tasks.rs | 19 | Frontmatter parsing, sorting, normalization |
-| markdown.rs | 1 | Table rendering (basic) |
-| tui_kanban.rs | 1 | Table rendering (basic) |
+| Module         | Tests | What's covered                                             |
+| -------------- | ----- | ---------------------------------------------------------- |
+| lib.rs         | 14    | Config defaults, color conversion, status/priority mapping |
+| theme.rs       | 4     | Theme discovery, fallback, field validation                |
+| tasks.rs       | 19    | Frontmatter parsing, sorting, normalization                |
+| markdown.rs    | 1     | Table rendering (basic)                                    |
+| tui\_kanban.rs | 1     | Table rendering (basic)                                    |
 
 ### What's missing
 
-#### Formatting pipeline (format_commonmark)
+#### Formatting pipeline (format\_commonmark)
 
-The `format_commonmark()` function chains three steps: comrak formatting → `align_tables()` → `strip_trailing_whitespace()`. No tests cover this pipeline.
+The `format_commonmark()` function chains three steps: comrak formatting → `align_tables()` →
+`strip_trailing_whitespace()`. No tests cover this pipeline.
 
 **Test cases needed:**
+
 - Table alignment: verify columns are padded to equal width
 - Table alignment: verify alignment markers (`:--`, `:-:`, `--:`) are preserved
 - Table alignment: verify indented tables (inside list items) are handled
@@ -33,7 +35,8 @@ The `format_commonmark()` function chains three steps: comrak formatting → `al
 - Task lists: verify `- [x]` / `- [ ]` items are preserved
 - Nested content: verify tables/code blocks inside list items stay nested
 
-**Approach:** Snapshot/golden-file tests. For each test case, provide input markdown and expected output. Compare `format_commonmark(input, width)` against expected.
+**Approach:** Snapshot/golden-file tests. For each test case, provide input markdown and expected output. Compare
+`format_commonmark(input, width)` against expected.
 
 ```
 tests/
@@ -45,11 +48,12 @@ tests/
     ...
 ```
 
-#### Markdown rendering (render_markdown)
+#### Markdown rendering (render\_markdown)
 
 The `render_markdown()` function produces `Vec<Line<Span>>` for ratatui. Only one test covers table rendering.
 
 **Test cases needed:**
+
 - Headings: verify h1/h2/h3 styles match theme
 - Code spans: verify inline code gets `code` style
 - Code blocks: verify multiline code blocks get `code_block` style
@@ -59,19 +63,21 @@ The `render_markdown()` function produces `Vec<Line<Span>>` for ratatui. Only on
 - Empty input: verify no panic
 - Frontmatter: verify it's stripped before rendering
 
-**Approach:** Check that specific spans have expected styles. The `Vec<Line<Span>>` output can be inspected for both content and style properties.
+**Approach:** Check that specific spans have expected styles. The `Vec<Line<Span>>` output can be inspected for both
+content and style properties.
 
 #### Slug resolution
 
 `resolve_slugs()` and `resolve_single_slug()` have no tests.
 
 **Test cases needed:**
+
 - Exact match: `foo` matches `foo.md`
 - Prefix match: `fo` matches `foo.md` and `foobar.md`
 - Substring match: `oo` matches `foo.md`
 - Case insensitive: `FOO` matches `foo.md`
 - No match: returns empty
-- Priority: exact > prefix > substring
+- Priority: exact \> prefix \> substring
 
 **Approach:** Create temp `.plan/` directory with test files, run resolution, verify results.
 
@@ -80,7 +86,8 @@ The `render_markdown()` function produces `Vec<Line<Span>>` for ratatui. Only on
 `run_filter()` has no tests.
 
 **Test cases needed:**
-- Plain text output (no_color mode)
+
+- Plain text output (no\_color mode)
 - Verify stdin → stdout pipeline works
 - Verify frontmatter is stripped
 
@@ -95,7 +102,7 @@ The `render_markdown()` function produces `Vec<Line<Span>>` for ratatui. Only on
 
 ### Example snapshot test structure
 
-```rust
+````rust
 #[test]
 fn format_table_alignment() {
     let input = "| A | B |\n|---|---|\n| short | x |\n| longer | y |\n";
@@ -118,4 +125,4 @@ fn format_strips_trailing_whitespace() {
         assert_eq!(line, line.trim_end(), "no trailing whitespace");
     }
 }
-```
+````
