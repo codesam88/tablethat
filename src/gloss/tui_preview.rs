@@ -202,12 +202,20 @@ impl App {
             let new_width = cols as usize;
             if new_width != self.width {
                 self.width = new_width;
+                // Save scroll position before reload (load_selected resets it)
+                let saved_scroll = self.scroll;
+                let saved_offset = self.offset;
                 self.load_selected();
-            }
-            // Clamp scroll to valid range after resize
-            let max_scroll = self.content.len().saturating_sub(rows as usize);
-            if self.scroll > max_scroll {
-                self.scroll = max_scroll;
+                // Restore scroll position, clamped to new content bounds
+                let max_scroll = self.content.len().saturating_sub(rows as usize);
+                self.scroll = saved_scroll.min(max_scroll);
+                self.offset = saved_offset;
+            } else {
+                // Width unchanged, just clamp scroll
+                let max_scroll = self.content.len().saturating_sub(rows as usize);
+                if self.scroll > max_scroll {
+                    self.scroll = max_scroll;
+                }
             }
         }
     }
@@ -323,8 +331,7 @@ fn render(frame: &mut Frame, app: &mut App) {
         .areas(area);
         (ba, Some(sa), sta)
     } else {
-        let [ba, sta] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+        let [ba, sta] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
         (ba, None, sta)
     };
 
