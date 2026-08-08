@@ -1,6 +1,7 @@
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
+use crossterm::terminal;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -195,6 +196,16 @@ impl App {
             .max()
             .unwrap_or(0)
     }
+
+    fn resize_to_terminal(&mut self) {
+        if let Ok((cols, _)) = terminal::size() {
+            let new_width = cols as usize;
+            if new_width != self.width {
+                self.width = new_width;
+                self.load_selected();
+            }
+        }
+    }
 }
 
 /// Run single-file TUI viewer
@@ -312,6 +323,9 @@ fn render(frame: &mut Frame, app: &mut App) {
         app.scroll = max_scroll;
     }
 
+    // Note: We do NOT call .wrap() here because render_markdown already
+    // handles word wrapping with our bracket-aware logic. Ratatui's default
+    // wrapping would re-wrap and break our bracket grouping rules.
     frame.render_widget(
         Paragraph::new(app.content.clone()).scroll((app.scroll as u16, app.offset as u16)),
         Rect::new(
@@ -376,7 +390,9 @@ fn handle_events(app: &mut App, _cfg: &lib::Config) -> Result<Action, Box<dyn st
         return Ok(Action::None);
     }
     match event::read()? {
-        Event::Resize(_, _) => {}
+        Event::Resize(_, _) => {
+            app.resize_to_terminal();
+        }
         Event::Mouse(MouseEvent { kind, .. }) => match kind {
             MouseEventKind::ScrollUp => {
                 app.scroll = app.scroll.saturating_sub(3);

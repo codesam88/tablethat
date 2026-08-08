@@ -4,14 +4,14 @@ use tablethat_lib::theme::ThemeFile;
 use termcolor::{ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 /// Run in filter mode: read markdown from stdin, render styled output to stdout.
-pub fn run_filter(theme: &ThemeFile, no_color: bool) {
+pub fn run_filter(theme: &ThemeFile, no_color: bool, width: usize) {
     let mut input = String::new();
     io::stdin()
         .read_to_string(&mut input)
         .expect("failed to read stdin");
 
     let md_theme = markdown::theme_from_cfg(&theme.theme);
-    let lines = markdown::render_markdown(&md_theme, &input, 120);
+    let lines = markdown::render_markdown(&md_theme, &input, width);
 
     let is_tty = atty_check();
     let use_color = is_tty && !no_color;

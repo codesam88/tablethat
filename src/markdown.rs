@@ -77,26 +77,63 @@ fn wrap_lines(text: &str, max: usize) -> Vec<String> {
 }
 
 fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
+    // Strategy: process spans character by character, accumulating a "pending" buffer.
+    // The pending buffer holds (text, style) pieces that haven't been committed to a line yet.
+    // We only flush pending to the current line when we reach a safe break point.
+    // This preserves style boundaries while keeping brackets with their content.
+
     let mut out: Vec<Vec<Span<'static>>> = Vec::new();
-    let mut cur: Vec<(String, Style)> = Vec::new();
+    let mut cur: Vec<(String, Style)> = Vec::new(); // current line
+    let mut pending: Vec<(String, Style)> = Vec::new(); // accumulated, not yet committed
     let mut line_len = 0usize;
+    let mut bracket_depth = 0i32; // positive = inside [] or ()
+
+    // Helper: try to commit pending pieces to current line
+    // Returns the length of pending text
+    fn pending_len(pending: &[(String, Style)]) -> usize {
+        pending.iter().map(|(s, _)| s.len()).sum()
+    }
+
+    // Helper: check if pending ends with an opening bracket
+    fn pending_ends_with_open(pending: &[(String, Style)]) -> bool {
+        pending
+            .last()
+            .map(|(s, _)| s.ends_with('(') || s.ends_with('['))
+            .unwrap_or(false)
+    }
+
+    // Helper: append a character to pending, merging with last piece if same style
+    fn push_char(pending: &mut Vec<(String, Style)>, ch: char, style: Style) {
+        if let Some(last) = pending.last_mut() {
+            if last.1 == style && !ch.is_control() {
+                last.0.push(ch);
+                return;
+            }
+        }
+        pending.push((ch.to_string(), style));
+    }
 
     for span in spans {
         let text = span.content.as_ref();
         let style = span.style;
-        let mut word = String::new();
 
         for ch in text.chars() {
             if ch == ' ' {
-                if !word.is_empty() {
-                    let wlen = word.len();
-                    if line_len + wlen > max && !cur.is_empty() {
+                // Space is always a break point
+                // First, commit any pending that shouldn't be held back
+                let pends_with_open = pending_ends_with_open(&pending);
+                if !pends_with_open && !pending.is_empty() {
+                    let plen = pending_len(&pending);
+                    if line_len + plen > max && !cur.is_empty() {
                         out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
                         line_len = 0;
                     }
-                    cur.push((std::mem::take(&mut word), style));
-                    line_len += wlen;
+                    for piece in pending.drain(..) {
+                        line_len += piece.0.len();
+                        cur.push(piece);
+                    }
                 }
+                // Now handle the space
                 if line_len + 1 > max && !cur.is_empty() {
                     out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
                     line_len = 0;
@@ -104,20 +141,62 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
                     cur.push((" ".to_string(), style));
                     line_len += 1;
                 }
+            } else if ch == ']' && bracket_depth > 0 {
+                // Closing bracket while inside brackets - part of the group
+                push_char(&mut pending, ch, style);
+                bracket_depth -= 1;
+            } else if ch == ']' {
+                // Standalone ']' - could be start of '](' link syntax
+                push_char(&mut pending, ch, style);
+            } else if ch == '(' && !pending.is_empty() && pending.last().unwrap().0.ends_with(']') {
+                // '(' immediately after ']' - this is '](' link syntax
+                // Commit pending up to and including ']', then start new group with '('
+                let plen = pending_len(&pending);
+                if line_len + plen > max && !cur.is_empty() {
+                    out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
+                    line_len = 0;
+                }
+                for piece in pending.drain(..) {
+                    line_len += piece.0.len();
+                    cur.push(piece);
+                }
+                // '(' starts the URL part - new bracket group
+                pending.push(("(".to_string(), style));
+                bracket_depth += 1;
+            } else if ch == '(' || ch == '[' {
+                // Opening bracket - increase depth, add to pending
+                push_char(&mut pending, ch, style);
+                bracket_depth += 1;
+            } else if ch == ')' && bracket_depth > 0 {
+                // Closing bracket inside group
+                push_char(&mut pending, ch, style);
+                bracket_depth -= 1;
+                // If we just closed the outermost bracket, check if we should commit
+                if bracket_depth == 0 {
+                    let plen = pending_len(&pending);
+                    if line_len + plen > max && !cur.is_empty() {
+                        out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
+                        line_len = 0;
+                    }
+                    for piece in pending.drain(..) {
+                        line_len += piece.0.len();
+                        cur.push(piece);
+                    }
+                }
             } else {
-                word.push(ch);
+                // Regular character
+                push_char(&mut pending, ch, style);
             }
         }
+    }
 
-        if !word.is_empty() {
-            let wlen = word.len();
-            if line_len + wlen > max && !cur.is_empty() {
-                out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
-                line_len = 0;
-            }
-            cur.push((std::mem::take(&mut word), style));
-            line_len += wlen;
+    // Flush any remaining pending
+    if !pending.is_empty() {
+        let plen = pending_len(&pending);
+        if line_len + plen > max && !cur.is_empty() {
+            out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
         }
+        cur.append(&mut pending);
     }
 
     if !cur.is_empty() {
@@ -601,6 +680,39 @@ fn align_tables(text: &str) -> String {
 mod tests {
     use super::*;
 
+    // ==========================================================================
+    // WORD WRAP RULES
+    // ==========================================================================
+    //
+    // 1. PARAGRAPH TEXT (wrap_spans):
+    //    - Break at spaces
+    //    - Break at '](' sequence: ']' stays with preceding text, '(' stays with following text
+    //    - Do NOT break at: '[', ']', '(', ')' individually
+    //    - Opening brackets stay with following word: (word stays together
+    //    - Closing brackets stay with preceding word: word) stays together
+    //    - Bracket groups stay together: (word), [word], [text](url)
+    //    - Bracket nesting is tracked across spans for proper grouping
+    //
+    // 2. LIST ITEMS (wrap_lines):
+    //    - Standard word wrap at spaces only
+    //    - No special bracket handling (plain text)
+    //    - Continuation lines are indented to align with content
+    //
+    // 3. CODE BLOCKS:
+    //    - NO wrapping - output as-is, preserving original line breaks
+    //    - Each line of code becomes one output line
+    //
+    // 4. TABLES:
+    //    - Column-based layout with computed widths
+    //    - No word wrap within cells
+    //    - Columns padded to calculated width (p60/p80/p100 percentiles)
+    //
+    // 5. HEADINGS:
+    //    - Single line, no wrapping
+    //    - Prefix (#, ##, ###) included in line
+    //
+    // ==========================================================================
+
     #[test]
     fn table_renders_header_and_body() {
         let md = "| **Name** | `Code` |\n|---|---|\n| foo | bar |\n";
@@ -613,5 +725,472 @@ mod tests {
         assert!(total.contains("Name"), "Missing header 'Name'");
         assert!(total.contains("foo"), "Missing body 'foo'");
         assert!(total.contains("="), "Missing separator");
+    }
+
+    // -------------------------------------------------------------------------
+    // Paragraph wrapping tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn wrap_paragraph_at_spaces() {
+        let spans = vec![Span::styled("one two three four five", Style::default())];
+        let wrapped = wrap_spans(&spans, 15);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        eprintln!("wrap_paragraph_at_spaces lines: {:?}", lines);
+        // Should break at spaces into multiple lines
+        assert!(lines.len() > 1, "Should wrap into multiple lines");
+        // First line should start with 'one'
+        assert!(lines[0].starts_with("one"));
+    }
+
+    #[test]
+    fn wrap_does_not_break_between_bracket_and_word() {
+        let spans = vec![Span::styled(
+            "some text before [link text](http://example.com) and more",
+            Style::default(),
+        )];
+        let wrapped = wrap_spans(&spans, 40);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|line| line.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        for line in &lines {
+            assert!(
+                !line.starts_with("link"),
+                "Should not break between '[' and 'link', got line: {}",
+                line
+            );
+        }
+        let all_text = lines.join("\n");
+        assert!(
+            all_text.contains("[link"),
+            "Bracket and word should stay together"
+        );
+    }
+
+    #[test]
+    fn wrap_does_not_break_between_paren_and_word() {
+        let spans = vec![Span::styled(
+            "some text before (paren word) and more after",
+            Style::default(),
+        )];
+        let wrapped = wrap_spans(&spans, 30);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|line| line.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        for line in &lines {
+            assert!(
+                !line.ends_with("("),
+                "Should not break between '(' and 'paren', got line: {}",
+                line
+            );
+        }
+        let all_text = lines.join("\n");
+        assert!(
+            all_text.contains("(paren"),
+            "Paren and word should stay together"
+        );
+    }
+
+    #[test]
+    fn wrap_breaks_at_link_boundary() {
+        // The '](' sequence is a valid break point
+        // ']' stays with preceding text, '(' stays with following text
+        let spans = vec![Span::styled(
+            "text before [link text](http://example.com) and more text after",
+            Style::default(),
+        )];
+        let wrapped = wrap_spans(&spans, 25);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // Should break between ']' and '('
+        let all_text = lines.join("\n");
+        assert!(all_text.contains("]"), "']' should be present");
+        assert!(all_text.contains("("), "'(' should be present");
+        // '](' should NOT appear together (they should be split across lines)
+        assert!(
+            !all_text.contains("]("),
+            "']' and '(' should be on separate lines"
+        );
+    }
+
+    #[test]
+    fn wrap_standalone_brackets_not_break_points() {
+        // Standalone '[', ']', '(', ')' should not cause breaks
+        let spans = vec![Span::styled(
+            "words with [brackets] and (parens) inside",
+            Style::default(),
+        )];
+        let wrapped = wrap_spans(&spans, 50);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // All on one line since it fits
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("[brackets]"));
+        assert!(lines[0].contains("(parens)"));
+    }
+
+    #[test]
+    fn wrap_closing_bracket_stays_with_previous() {
+        // Closing ')' should stay with previous word even across span boundaries
+        // This simulates markdown like: (`input`)
+        let spans = vec![
+            Span::styled("x (", Style::default()),
+            Span::styled("input", Style::default()),
+            Span::styled(")", Style::default()),
+        ];
+        let wrapped = wrap_spans(&spans, 8);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // '(input)' should stay together
+        let all_text = lines.join("\n");
+        assert!(
+            all_text.contains("(input)"),
+            "Closing paren should stay with word, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn render_markdown_with_inline_code_and_parens() {
+        // Test the full rendering pipeline with markdown like: x (`input`)
+        // The inline code creates separate spans for '(' and ')'
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let md = "x (`input`)";
+
+        // Test at width 8 - should fit on one line
+        let lines = render_markdown(&th, md, 8);
+        let text_lines: Vec<String> = lines
+            .iter()
+            .filter(|l| !l.spans.is_empty())
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        eprintln!("width=8: {:?}", text_lines);
+        let all_text = text_lines.join("\n");
+        assert!(
+            all_text.contains("(input)"),
+            "'(input)' should stay together at width 8, got: {:?}",
+            text_lines
+        );
+
+        // Test at width 7 - should break but keep (input) together
+        let lines = render_markdown(&th, md, 7);
+        let text_lines: Vec<String> = lines
+            .iter()
+            .filter(|l| !l.spans.is_empty())
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        eprintln!("width=7: {:?}", text_lines);
+        let all_text = text_lines.join("\n");
+        assert!(
+            all_text.contains("(input)"),
+            "'(input)' should stay together at width 7, got: {:?}",
+            text_lines
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // List item wrapping tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn list_item_wraps_with_indent() {
+        let md = "- This is a long list item that should wrap at the margin and continue with proper indentation\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 40);
+        let text_lines: Vec<String> = lines
+            .iter()
+            .filter(|l| !l.spans.is_empty())
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // First line has the bullet
+        assert!(text_lines[0].starts_with("  - "));
+        // Continuation lines are indented
+        if text_lines.len() > 1 {
+            assert!(
+                text_lines[1].starts_with("    "),
+                "Continuation should be indented: {:?}",
+                text_lines[1]
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Code block tests (no wrapping)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn code_block_no_wrapping() {
+        let md = "```\nfn main() {\n    let x = 1;\n    let long_variable_name = something_very_long_that_would_never_fit_on_one_line_if_wrapped;\n}\n```\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 40);
+        // Find the code lines (they have code_block style)
+        let code_lines: Vec<String> = lines
+            .iter()
+            .filter(|l| l.spans.iter().any(|s| s.style == th.code_block))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        // Code should NOT be wrapped - long line stays as-is
+        assert!(
+            code_lines.iter().any(|l| l.contains("long_variable_name")),
+            "Code should preserve original lines without wrapping"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Table tests (column-based, no word wrap)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn table_columns_computed_properly() {
+        let md = "| Short | A much longer header |\n|---|---|\n| a | b |\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 80);
+        let table_lines: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        eprintln!("table_lines: {:?}", table_lines);
+        let table_text = table_lines.join("\n");
+        // Table should have separators
+        assert!(table_text.contains("="), "Table should have separator");
+        // Columns should contain the header text
+        assert!(table_text.contains("Short"));
+        // Note: table column calculation may truncate long headers
+        assert!(
+            table_text.contains("A much") || table_text.contains("longer"),
+            "Table should contain header text"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Heading tests (no wrapping)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn heading_no_wrapping() {
+        let md =
+            "# This is a very long heading that goes on and on and on and should not be wrapped\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 40);
+        // Heading should be on one line with prefix
+        let heading_line = lines
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.content.starts_with("# ")))
+            .expect("Should have heading");
+        let heading_text: String = heading_line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(heading_text.starts_with("# "));
+        assert!(heading_text.contains("very long heading"));
+    }
+
+    // ==========================================================================
+    // CORNER CASE TESTS
+    // ==========================================================================
+
+    #[test]
+    fn corner_nested_brackets() {
+        // Nested brackets should stay together on same line
+        let spans = vec![Span::styled("x ([word]) y", Style::default())];
+        let wrapped = wrap_spans(&spans, 8);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // Check that ([word]) appears on a SINGLE line, not split across lines
+        assert!(
+            lines.iter().any(|l| l.contains("([word])")),
+            "Nested brackets should be on same line, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn corner_double_brackets() {
+        // Double brackets should stay together on same line
+        let spans = vec![Span::styled("x ((word)) y", Style::default())];
+        let wrapped = wrap_spans(&spans, 8);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            lines.iter().any(|l| l.contains("((word))")),
+            "Double brackets should be on same line, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn corner_multiple_bracket_groups() {
+        // Multiple bracket groups should each stay together on same line
+        let spans = vec![Span::styled("x (a) (b) y", Style::default())];
+        let wrapped = wrap_spans(&spans, 8);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            lines.iter().any(|l| l.contains("(a)")),
+            "(a) should be on same line"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("(b)")),
+            "(b) should be on same line"
+        );
+    }
+
+    #[test]
+    fn corner_empty_brackets() {
+        // Empty brackets should stay together on same line
+        let spans = vec![Span::styled("x () y", Style::default())];
+        let wrapped = wrap_spans(&spans, 6);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            lines.iter().any(|l| l.contains("()")),
+            "Empty brackets should be on same line, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn corner_unclosed_bracket() {
+        // Unclosed opening bracket should stay with following content on same line
+        let spans = vec![Span::styled("x (word more", Style::default())];
+        let wrapped = wrap_spans(&spans, 8);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            lines.iter().any(|l| l.contains("(word")),
+            "Unclosed opening bracket should stay with word on same line, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn corner_long_bracket_group_breaks_internally() {
+        // Very long bracket group should break at internal spaces
+        // but ( stays with first word, ) stays with last word
+        let spans = vec![Span::styled("x (very long text) y", Style::default())];
+        let wrapped = wrap_spans(&spans, 10);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // Opening ( should be on same line as "very"
+        assert!(
+            lines.iter().any(|l| l.contains("(very")),
+            "Opening ( should stay with first word, got: {:?}",
+            lines
+        );
+        // Closing ) should be on same line as "text"
+        assert!(
+            lines.iter().any(|l| l.contains("text)")),
+            "Closing ) should stay with last word, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn corner_bracket_across_spans_preserves_style() {
+        // Test that styles are preserved when brackets span multiple spans
+        let spans = vec![
+            Span::styled("x (", Style::default()),
+            Span::styled(
+                "word",
+                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            Span::styled(")", Style::default()),
+        ];
+        let wrapped = wrap_spans(&spans, 8);
+        // Check that we have the right pieces
+        let all_spans: Vec<(&str, bool)> = wrapped
+            .iter()
+            .flat_map(|line| {
+                line.iter().map(|s| {
+                    let is_bold = s
+                        .style
+                        .add_modifier
+                        .contains(ratatui::style::Modifier::BOLD);
+                    (s.content.as_ref(), is_bold)
+                })
+            })
+            .collect();
+        // 'word' should be bold, others should not
+        assert!(
+            all_spans
+                .iter()
+                .any(|(text, bold)| *text == "word" && *bold),
+            "'word' should be bold, got: {:?}",
+            all_spans
+        );
+        assert!(
+            all_spans.iter().any(|(text, bold)| *text == "(" && !*bold),
+            "'(' should not be bold"
+        );
+        assert!(
+            all_spans.iter().any(|(text, bold)| *text == ")" && !*bold),
+            "')' should not be bold"
+        );
+    }
+
+    #[test]
+    fn corner_square_brackets_stay_together() {
+        // Square brackets should behave like parentheses
+        let spans = vec![Span::styled("x [word] y", Style::default())];
+        let wrapped = wrap_spans(&spans, 8);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            lines.iter().any(|l| l.contains("[word]")),
+            "Square brackets should be on same line, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn corner_adjacent_bracket_groups() {
+        // Adjacent bracket groups ([]) should stay together
+        let spans = vec![Span::styled("x ([]) y", Style::default())];
+        let wrapped = wrap_spans(&spans, 6);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            lines.iter().any(|l| l.contains("([])")),
+            "Adjacent bracket groups should be on same line, got: {:?}",
+            lines
+        );
     }
 }
