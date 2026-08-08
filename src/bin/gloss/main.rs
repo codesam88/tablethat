@@ -41,7 +41,10 @@ fn main() {
 
     let cfg = lib::Config::load("gloss", "GLOSS_", cli.config.as_deref());
     let themes = lib::theme::load_themes(cfg.themes_dir.as_deref(), "gloss");
-    let width = cli.width.unwrap_or(cfg.width);
+    let default_width = crossterm::terminal::size()
+        .map(|(cols, _)| cols as usize)
+        .unwrap_or(80);
+    let width = cli.width.unwrap_or(default_width);
 
     // Select theme
     let theme = if let Some(ref name) = cli.theme {
@@ -70,7 +73,7 @@ fn main() {
         }
         // Filter mode: stdin piped
         None if !is_tty => {
-            filter::run_filter(&theme, cli.no_color);
+            filter::run_filter(&theme, cli.no_color, width);
         }
         // No arg + tty: browse .md files in cwd
         None => {
