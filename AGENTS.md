@@ -96,5 +96,7 @@ If multiple tasks match, a TUI selector appears (Enter to select, q/Ctrl-C to ab
 
 The default view (`plan` with no subcommand) is configurable via `plan.toml`:
 ```toml
-default_view = "kanban"  # or "list" (default)
+default_view = "list"  # or "kanban" (default)
 ```
+
+For the interactive kanban browser, use `plan browse` or `plan b`.
