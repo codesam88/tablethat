@@ -198,11 +198,16 @@ impl App {
     }
 
     fn resize_to_terminal(&mut self) {
-        if let Ok((cols, _)) = terminal::size() {
+        if let Ok((cols, rows)) = terminal::size() {
             let new_width = cols as usize;
             if new_width != self.width {
                 self.width = new_width;
                 self.load_selected();
+            }
+            // Clamp scroll to valid range after resize
+            let max_scroll = self.content.len().saturating_sub(rows as usize);
+            if self.scroll > max_scroll {
+                self.scroll = max_scroll;
             }
         }
     }
@@ -303,17 +308,23 @@ enum Action {
     OpenEditor,
 }
 fn render(frame: &mut Frame, app: &mut App) {
+    let area = frame.area();
+    // Guard against zero-size terminal
+    if area.width < 3 || area.height < 2 {
+        return;
+    }
+
     let (body_area, search_area, status_area) = if app.search_mode || !app.search_query.is_empty() {
         let [ba, sa, sta] = Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(1),
             Constraint::Length(1),
         ])
-        .areas(frame.area());
+        .areas(area);
         (ba, Some(sa), sta)
     } else {
         let [ba, sta] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
         (ba, None, sta)
     };
 
@@ -321,6 +332,11 @@ fn render(frame: &mut Frame, app: &mut App) {
     let max_scroll = app.content.len().saturating_sub(app.viewport_height);
     if app.scroll > max_scroll {
         app.scroll = max_scroll;
+    }
+
+    // Ensure body_area has valid dimensions
+    if body_area.width < 2 || body_area.height == 0 {
+        return;
     }
 
     // Note: We do NOT call .wrap() here because render_markdown already
@@ -458,7 +474,7 @@ fn handle_events(app: &mut App, _cfg: &lib::Config) -> Result<Action, Box<dyn st
                     app.offset = app.offset.saturating_sub(8);
                 }
                 KeyCode::Right | KeyCode::Char('l') => {
-                    let max = app.max_line_width().saturating_sub(app.viewport_height);
+                    let max = app.max_line_width().saturating_sub(app.width);
                     app.offset = app.offset.saturating_add(8).min(max);
                 }
                 KeyCode::Enter if app.files.len() > 1 => {
