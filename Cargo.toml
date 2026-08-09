@@ -34,3 +34,6 @@ comrak = { version = "0.53", default-features = false }
 figment = { version = "0.10", features = ["toml", "env"] }
 directories = "6"
 toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3.27.0"

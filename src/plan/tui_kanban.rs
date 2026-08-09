@@ -35,6 +35,7 @@ struct App<'a> {
     root: &'a Path,
     cfg: &'a Config,
     entries: Vec<PathBuf>,
+    all_tasks: Vec<crate::tasks::LoadedTask>,
     tasks: Vec<crate::tasks::LoadedTask>,
     task_paths: HashMap<String, PathBuf>,
     columns: Vec<Column>,
@@ -47,6 +48,7 @@ struct App<'a> {
     filter_priority: Option<String>,
     filter_area: Option<String>,
     filter_search: Option<String>,
+    hide_done: bool,
     mode: Mode,
     preview: Vec<Line<'static>>,
     preview_scroll: usize,
@@ -81,12 +83,17 @@ impl<'a> App<'a> {
             })
             .collect();
 
+        // Load all tasks unfiltered for hidden-count display
+        let all_tasks =
+            crate::tasks::load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
+
         let themes = lib::theme::load_themes(cfg.themes_dir.as_deref(), "plan");
 
         let mut app = Self {
             root,
             cfg,
             entries,
+            all_tasks,
             tasks,
             task_paths: path_map,
             columns: Vec::new(),
@@ -99,6 +106,7 @@ impl<'a> App<'a> {
             filter_priority: None,
             filter_area: None,
             filter_search: None,
+            hide_done: cfg.hide_done,
             mode: Mode::Browse,
             preview: Vec::new(),
             preview_scroll: 0,
@@ -123,6 +131,11 @@ impl<'a> App<'a> {
     }
 
     fn reload_tasks(&mut self) {
+        let exclude: Vec<String> = if self.hide_done {
+            vec!["done".into()]
+        } else {
+            vec![]
+        };
         self.tasks = crate::tasks::load_and_filter_tasks(
             &self.entries,
             self.filter_status.as_deref(),
@@ -130,6 +143,7 @@ impl<'a> App<'a> {
             self.filter_priority.as_deref(),
             self.filter_area.as_deref(),
             self.filter_search.as_deref(),
+            &exclude,
         );
         let path_map: HashMap<String, PathBuf> = self
             .entries
@@ -153,6 +167,7 @@ impl<'a> App<'a> {
             || self.filter_priority.is_some()
             || self.filter_area.is_some()
             || self.filter_search.is_some()
+            || self.hide_done != self.cfg.hide_done
     }
 
     fn rebuild_columns(&mut self) {
@@ -195,6 +210,11 @@ pub fn run_tui(
 ) {
     let tasks_dir = root.join(".plan");
     let entries = crate::tasks::read_task_files(&tasks_dir).unwrap_or_default();
+    let exclude: Vec<String> = if cfg.hide_done {
+        vec!["done".into()]
+    } else {
+        vec![]
+    };
     let tasks = crate::tasks::load_and_filter_tasks(
         &entries,
         status_filter,
@@ -202,6 +222,7 @@ pub fn run_tui(
         priority_filter,
         area_filter,
         search_query,
+        &exclude,
     );
 
     if tasks.is_empty() {
@@ -499,11 +520,21 @@ impl App<'_> {
             let is_active = col_idx == self.selected_column;
             let color = status_color(&column.status, &self.cfg.colors);
 
-            let header = format!(
-                "{} ({})",
-                column.status.to_uppercase(),
-                column.task_indices.len()
-            );
+            let total = self
+                .all_tasks
+                .iter()
+                .filter(|t| t.task.status == column.status)
+                .count();
+            let shown = column.task_indices.len();
+            let header = if self.hide_done && column.status == "done" && shown < total {
+                format!(
+                    "{} ({} hidden)",
+                    column.status.to_uppercase(),
+                    total - shown
+                )
+            } else {
+                format!("{} ({})", column.status.to_uppercase(), shown)
+            };
             let dash = area.width.saturating_sub(header.len() as u16 + 2);
             lines.push(Line::from(Span::styled(
                 format!("{} {}", header, "─".repeat(dash.max(1) as usize)),
@@ -511,7 +542,15 @@ impl App<'_> {
             )));
 
             if column.task_indices.is_empty() {
-                lines.push(Line::from(Span::raw(" (none)")));
+                let none_style = if is_active {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::White)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(" (none)", none_style)));
             } else {
                 for (row_idx, &task_idx) in column.task_indices.iter().enumerate() {
                     let task = &self.tasks[task_idx];
@@ -632,8 +671,13 @@ impl App<'_> {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let done_hint = if self.hide_done {
+            "h:show-done"
+        } else {
+            "h:hide-done"
+        };
         let text = format!(
-            " Enter:view  f:filter  e:edit  {}  Ctrl-c:quit ",
+            " Enter:view  f:filter  e:edit  {done_hint}  {}  Ctrl-c:quit ",
             if self.has_active_filters() {
                 "q:clear-filters"
             } else {
@@ -748,6 +792,7 @@ impl App<'_> {
                                     self.filter_priority = None;
                                     self.filter_area = None;
                                     self.filter_search = None;
+                                    self.hide_done = self.cfg.hide_done;
                                     self.reload_tasks();
                                     Action::None
                                 } else {
@@ -770,6 +815,11 @@ impl App<'_> {
                                     }
                                     self.reload_tasks();
                                 }
+                                Action::None
+                            }
+                            KeyCode::Char('h') => {
+                                self.hide_done = !self.hide_done;
+                                self.reload_tasks();
                                 Action::None
                             }
                             KeyCode::Char('e') if !self.columns.is_empty() => Action::OpenEditor,
@@ -796,17 +846,8 @@ impl App<'_> {
                     self.selected_task -= 1;
                 } else if self.selected_column > 0 {
                     self.selected_column -= 1;
-                    while self.selected_column > 0
-                        && self.columns[self.selected_column].task_indices.is_empty()
-                    {
-                        self.selected_column -= 1;
-                    }
-                    if !self.columns[self.selected_column].task_indices.is_empty() {
-                        self.selected_task = self.columns[self.selected_column]
-                            .task_indices
-                            .len()
-                            .saturating_sub(1);
-                    }
+                    let col = &self.columns[self.selected_column];
+                    self.selected_task = col.task_indices.len().saturating_sub(1);
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -815,14 +856,7 @@ impl App<'_> {
                     self.selected_task += 1;
                 } else if self.selected_column + 1 < self.columns.len() {
                     self.selected_column += 1;
-                    while self.selected_column + 1 < self.columns.len()
-                        && self.columns[self.selected_column].task_indices.is_empty()
-                    {
-                        self.selected_column += 1;
-                    }
-                    if !self.columns[self.selected_column].task_indices.is_empty() {
-                        self.selected_task = 0;
-                    }
+                    self.selected_task = 0;
                 }
             }
             KeyCode::Left | KeyCode::Char('h') => {

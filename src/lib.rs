@@ -18,6 +18,7 @@ pub struct Config {
     pub themes_dir: Option<PathBuf>,
     pub default_view: String,
     pub default_sort: Vec<String>,
+    pub hide_done: bool,
     pub kanban_order: Vec<String>,
     pub tui_width: usize,
     pub pager_width: usize,
@@ -72,6 +73,7 @@ impl Default for Config {
             themes_dir: None,
             default_view: "kanban".into(),
             default_sort: vec!["priority".into(), "slug".into()],
+            hide_done: true,
             kanban_order: vec![
                 "idea".into(),
                 "backlog".into(),

@@ -25,6 +25,10 @@ struct Cli {
     /// Repo root containing .plan (default: auto-detect)
     #[arg(short, long, global = true, value_name = "PATH")]
     root: Option<PathBuf>,
+
+    /// Show done items (hidden by default)
+    #[arg(long, global = true)]
+    show_done: bool,
 }
 
 #[derive(Parser)]
@@ -170,6 +174,9 @@ fn main() {
     let mut cfg = lib::Config::load("plan", "PLAN_", cli.config.as_deref());
     if cli.root.is_some() {
         cfg.root = cli.root;
+    }
+    if cli.show_done {
+        cfg.hide_done = false;
     }
     let root = cfg.root.clone().unwrap_or_else(lib::workspace_root);
 

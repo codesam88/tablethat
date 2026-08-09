@@ -191,6 +191,12 @@ pub fn list_tasks(
         }
     };
 
+    let all_tasks = load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
+    let exclude: Vec<String> = if cfg.hide_done {
+        vec!["done".into()]
+    } else {
+        vec![]
+    };
     let mut tasks = load_and_filter_tasks(
         &entries,
         status_filter,
@@ -198,6 +204,7 @@ pub fn list_tasks(
         priority_filter,
         area_filter,
         search_query,
+        &exclude,
     );
 
     if tasks.is_empty() {
@@ -213,7 +220,14 @@ pub fn list_tasks(
     tasks.sort_by(|a, b| cmp_tasks(a, b, &effective_sort, &cfg.kanban_order));
 
     if kanban {
-        display_kanban(&tasks, &cfg.kanban_order, &cfg.colors, &effective_sort);
+        display_kanban(
+            &tasks,
+            &all_tasks,
+            cfg.hide_done,
+            &cfg.kanban_order,
+            &cfg.colors,
+            &effective_sort,
+        );
     } else {
         display_table(&tasks, &cfg.colors);
     }
@@ -226,6 +240,7 @@ pub fn load_and_filter_tasks(
     priority_filter: Option<&str>,
     area_filter: Option<&str>,
     search_query: Option<&str>,
+    statuses_to_exclude: &[String],
 ) -> Vec<LoadedTask> {
     let mut tasks: Vec<LoadedTask> = Vec::new();
 
@@ -272,6 +287,9 @@ pub fn load_and_filter_tasks(
             String::new()
         };
 
+        if statuses_to_exclude.contains(&task.status) {
+            continue;
+        }
         if let Some(s) = status_filter
             && task.status != s
         {
@@ -395,6 +413,8 @@ fn status_label(status: &str) -> &str {
 
 fn display_kanban(
     tasks: &[LoadedTask],
+    all_tasks: &[LoadedTask],
+    hide_done: bool,
     kanban_order: &[String],
     colors: &ColorsConfig,
     sort_keys: &[String],
@@ -428,9 +448,17 @@ fn display_kanban(
         let color = status_color(status, colors);
         let count = group.len();
         let bar = "─".repeat(bar_w);
+        let total = all_tasks
+            .iter()
+            .filter(|t| t.task.status == *status)
+            .count();
 
         let _ = writeln!(stdout);
-        write_colored!(stdout, color, "{} ({})", label, count);
+        if hide_done && *status == "done" && count < total {
+            write_colored!(stdout, color, "{} ({} hidden)", label, total - count);
+        } else {
+            write_colored!(stdout, color, "{} ({})", label, count);
+        }
         let _ = writeln!(stdout, " {}", bar);
 
         if group.is_empty() {
@@ -1191,5 +1219,85 @@ mod tests {
         let input = "---\nstatus: open\ntype: bug\npriority: low\narea: backend\n---\n\nbody\n";
         let output = normalize_frontmatter(input).unwrap();
         assert_eq!(output, input);
+    }
+
+    fn make_task_file(dir: &std::path::Path, slug: &str, status: &str, typ: &str, priority: &str) {
+        let content = format!(
+            "---\nstatus: {status}\ntype: {typ}\npriority: {priority}\narea: \n---\n\n## Notes\n"
+        );
+        std::fs::write(dir.join(format!("{slug}.md")), content).unwrap();
+    }
+
+    #[test]
+    fn filter_excludes_done_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        make_task_file(dir, "alpha", "open", "bug", "high");
+        make_task_file(dir, "beta", "done", "feature", "low");
+        make_task_file(dir, "gamma", "in-progress", "chore", "medium");
+
+        let entries = read_task_files(dir).unwrap();
+        let exclude: Vec<String> = vec!["done".into()];
+        let tasks = load_and_filter_tasks(&entries, None, None, None, None, None, &exclude);
+        let slugs: Vec<&str> = tasks.iter().map(|t| t.slug.as_str()).collect();
+        assert!(slugs.contains(&"alpha"));
+        assert!(slugs.contains(&"gamma"));
+        assert!(!slugs.contains(&"beta"));
+    }
+
+    #[test]
+    fn filter_no_exclusions_returns_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        make_task_file(dir, "alpha", "open", "bug", "high");
+        make_task_file(dir, "beta", "done", "feature", "low");
+
+        let entries = read_task_files(dir).unwrap();
+        let tasks = load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
+        assert_eq!(tasks.len(), 2);
+    }
+
+    #[test]
+    fn filter_exclusions_combine_with_status_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        make_task_file(dir, "alpha", "open", "bug", "high");
+        make_task_file(dir, "beta", "done", "feature", "low");
+        make_task_file(dir, "gamma", "open", "chore", "medium");
+
+        let entries = read_task_files(dir).unwrap();
+        let exclude: Vec<String> = vec!["done".into()];
+        let tasks = load_and_filter_tasks(&entries, Some("open"), None, None, None, None, &exclude);
+        let slugs: Vec<&str> = tasks.iter().map(|t| t.slug.as_str()).collect();
+        assert!(slugs.contains(&"alpha"));
+        assert!(slugs.contains(&"gamma"));
+        assert!(!slugs.contains(&"beta"));
+        assert_eq!(tasks.len(), 2);
+    }
+
+    #[test]
+    fn config_hide_done_defaults_to_true() {
+        let cfg = lib::Config::default();
+        assert!(cfg.hide_done);
+    }
+
+    #[test]
+    fn hidden_count_matches_difference_between_all_and_filtered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        make_task_file(dir, "alpha", "open", "bug", "high");
+        make_task_file(dir, "beta", "done", "feature", "low");
+        make_task_file(dir, "gamma", "done", "chore", "medium");
+
+        let entries = read_task_files(dir).unwrap();
+        let all = load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
+        let exclude: Vec<String> = vec!["done".into()];
+        let filtered = load_and_filter_tasks(&entries, None, None, None, None, None, &exclude);
+
+        let all_done = all.iter().filter(|t| t.task.status == "done").count();
+        let filtered_done = filtered.iter().filter(|t| t.task.status == "done").count();
+        assert_eq!(all_done, 2);
+        assert_eq!(filtered_done, 0);
+        assert_eq!(all_done - filtered_done, 2); // hidden count
     }
 }
