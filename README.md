@@ -43,16 +43,18 @@ default directories (typically `~/.cargo/bin/` and `~/.config/{plan,gloss}/`).
 
 Task management with kanban TUI. Tasks live in `.plan/*.md` as markdown files with YAML frontmatter.
 
-    plan                    # list tasks (default)
-    plan list               # list tasks
-    plan kanban             # kanban view (alias: k)
+    plan                    # kanban view (default)
+    plan browse             # interactive browser (alias: b)
+    plan kanban             # kanban text view (alias: k)
+    plan list               # list tasks (alias: l)
     plan add <slug>         # create a task (alias: a)
     plan open <slug>        # open in $EDITOR (alias: o)
     plan delete <slug>      # delete a task (alias: d)
-    plan tui                # interactive TUI
     plan init               # scaffold .plan/ directory
     plan lint               # validate frontmatter
     plan format [PATH]      # format markdown
+
+Commands can be abbreviated to their first letter (e.g., `plan b` for browse)
 
 ### gloss
 
