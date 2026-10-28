@@ -12,14 +12,10 @@ each time I ended up rolling my own:
 - [x] Simple pager to render markdown with basic search/scroll + themes (@`glow` really??)
 - [x] All confirmed to work and look good on transparent/dark terminals with tmux/ssh (YMMV!)
 
+Obligatory **screenshots**: TUI kanban view (`plan b`) and viewing a task via the included markdown viewer (`gloss`)
 
-Why **table that**? Imagine you are coding away with AI, deep inside some rabbit
-hole, when it throws you something funny. You ask back, and a short exploration
-later you realize there is a potential veritable problem or architectural issue
-that may need your attention. Instead of continuing the rabbit hole and
-polluting your context, you *table that*, and tell it to create a task
-documenting the issue and initial findings, then let it go back to work. You go
-investigate on the side, or let it get back to you next day.
+<img width="42%" alt="TUI Kanban overview (`plan b`)" src="https://github.com/user-attachments/assets/27c05260-8d38-4763-9bda-d2b1e91a4952" />
+<img width="50%" height="627" alt="image" src="https://github.com/user-attachments/assets/a6f9b889-5167-421d-acaa-09bd1ff20dcf" />
 
 
 ## Quick Steps
