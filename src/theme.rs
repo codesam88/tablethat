@@ -1,6 +1,36 @@
-use crate::ThemeConfig;
+use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ThemeConfig {
+    pub h1_color: Color,
+    pub h2_color: Color,
+    pub h3_color: Color,
+    pub code_color: Color,
+    #[serde(default = "default_code_block_color")]
+    pub code_block_color: Color,
+    pub bold_style: String,
+    pub emphasis_style: String,
+}
+
+fn default_code_block_color() -> Color {
+    Color::Yellow
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            h1_color: Color::Cyan,
+            h2_color: Color::Cyan,
+            h3_color: Color::Cyan,
+            code_color: Color::Yellow,
+            code_block_color: Color::Yellow,
+            bold_style: "bold".into(),
+            emphasis_style: "underlined".into(),
+        }
+    }
+}
 
 /// A theme loaded from a TOML file.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -167,5 +197,17 @@ mod tests {
             let _ = theme.theme.code_color;
             let _ = theme.theme.code_block_color;
         }
+    }
+
+    #[test]
+    fn theme_config_defaults() {
+        let theme = ThemeConfig::default();
+        assert_eq!(theme.h1_color, Color::Cyan);
+        assert_eq!(theme.h2_color, Color::Cyan);
+        assert_eq!(theme.h3_color, Color::Cyan);
+        assert_eq!(theme.code_color, Color::Yellow);
+        assert_eq!(theme.code_block_color, Color::Yellow);
+        assert_eq!(theme.bold_style, "bold");
+        assert_eq!(theme.emphasis_style, "underlined");
     }
 }
