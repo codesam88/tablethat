@@ -9,7 +9,40 @@ permissions:
   contents: read
 
 jobs:
+  # Tags bypass CI (which runs on branch pushes/PRs), so gate the release
+  # on the same checks here: nothing ships red.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Add Rust components
+        run: rustup component add clippy rustfmt
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check (format + clippy)
+        run: just check
+
+      - name: Test
+        run: just test
+
+      - name: Install audit tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+
+      - name: Audit
+        run: just audit
+
   build:
+    needs: verify
     permissions:
       contents: read
     strategy:

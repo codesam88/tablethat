@@ -17,7 +17,7 @@ then ride-alongs.
 - [x] Step 1: frontmatter injection — validate values in `create_task`,
   YAML-quote strings in `value_to_yaml_str` (TDD).
 - [x] Step 2: gloss highlight Unicode panic — char-aware offsets (TDD).
-- [ ] Step 3: release gates — test/clippy/audit before publish.
+- [x] Step 3: release gates — test/clippy/audit before publish.
 - [ ] Step 4: pin action SHAs.
 - [ ] Step 5: `list_tasks` returns `Result` (drop lib `exit`).
 - [ ] Step 6: slug truncation char boundary (+ helper test).
@@ -33,6 +33,9 @@ then ride-alongs.
 
 ## Progress (newest first)
 
+- 2026-10-31: Step 3 DONE (config-only). `verify` job (check + test +
+  audit, same pinned actions as CI) gates `build`; chain verified via
+  YAML parse. Tags can no longer ship red.
 - 2026-10-31: Step 2 DONE (TDD: helper RED missing, then 1 wrong test
   expectation corrected — "Hello" matches too). `ci_match_ranges` maps
   lowercase expansions back to whole source chars; non-overlapping like
