@@ -33,7 +33,7 @@ Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawba
 - [x] Step 3 (4A+B): gloss resolution + editor splitting.
 - [x] Step 4 (5A+B): config/theme warnings + `Result` propagation.
 - [x] Step 5 (6A+B+C): workflow permissions + dependabot + release attestation.
-- [ ] Step 6 (2A): verify `lru` fix upstream, `cargo update -p ratatui`.
+- [ ] Step 6 (2A): `lru` fixed upstream — monitor via daily `audit.yml` (no action; `cargo audit` currently shows 1 allowed warning).
 
 ## Security (labels: [class|severity|effort])
 
@@ -55,7 +55,7 @@ Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawba
 
 - [x] Add `tests/` e2e: `plan add/list/lint` lifecycle + `gloss` stdin->stdout filter (currently only inline units, `tests/` empty).
 - [x] Return `Result` from `create_task/format_file/normalize_all/validate_all` instead of `bool + eprintln!`. Remove prod `expect()` in `tasks.rs:104,748,760,766`.
-- [ ] Split god files: `tasks.rs:1303`, `markdown.rs:1196`, `tui_kanban.rs:974`. Dedup `status_color` wrapper + table test.
+- [x] Split god files: `tasks.rs:1303`, `markdown.rs:1196`, `tui_kanban.rs:974`. Dedup `status_color` wrapper + table test.
 
 ## Acceptance
 
@@ -63,6 +63,10 @@ Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawba
 
 ## Progress (newest first)
 
+- 2026-10-31: Layout track DONE (plan: `.plan/modular-layout.md`, all steps
+  checked). tasks.rs deleted (6 modules, 122-390 lines), lib.rs split
+  (11 lines), no `#[path]`, no dup helpers, mains are parse + `run()`.
+  107 tests green. Remaining: `lru` watch only (automated via daily audit).
 - 2026-10-31: Result refactor DONE by parent (TDD: 5 contract tests RED on bool signatures, then GREEN first pass — 105 total, e2e green through rewritten CLI arms). `create_task/delete_task -> Result<PathBuf,String>`, `open_task/run_filter -> Result<(),String>`, `format_file -> Result<bool /*changed*/,String>`, `normalize_all -> Result<usize,Vec<String>>`, `validate_all(root, &mut warnings) -> Result<(),Vec<String>>`; all 4 named `expect!`s + `markdown.rs` guarded `unwrap` + filter stdin `expect` removed (zero prod expect/unwrap left). Printing moved to CLI arms; `list` output order now errors-then-warnings. Bonus fix: gloss nonzero exit now reports code (was silent).
 - 2026-10-31: CLI e2e DONE by parent (TDD: harness compile-RED, then green; non-vacuity proven by mutating `is_valid_slug` call off — reject test FAILS, restore heals). `tests/cli_e2e.rs`, 12 tests, invariant-style (exit codes, file existence, synthesized-value matches, idempotency, width bound) — no output snapshots. Isolation via temp `--root`+cwd, temp HOME/XDG, stripped PLAN_*/GLOSS_*/EDITOR. Excludes TTY modes (open/browse/kanban, gloss TUI). 100 tests total pass. Acceptance item "at least one e2e test" satisfied.
 - 2026-10-31: Render-test layer DONE by parent (TDD: harness RED on missing corpus, then fixtures). `tests/gloss_render.rs` + `tests/golden/` (8 corpus docs): table-driven fixed patterns, golden files (blessed via `UPDATE_GOLDEN=1`, each reviewed), properties (no-panic at 4 widths, no content loss, formatter idempotent), theme-mapped-once. Caught 3 wrong expectations pre-commit (trailing-space wrap wart now pinned+noted; link flattening vs span-level rule clarified; fence-info/URL words excluded from loss check). 6 integration tests, 88 total pass. CLI lifecycle e2e (plan add/list/lint, gloss filter) still open.
