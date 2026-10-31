@@ -104,11 +104,12 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
 
     // Helper: append a character to pending, merging with last piece if same style
     fn push_char(pending: &mut Vec<(String, Style)>, ch: char, style: Style) {
-        if let Some(last) = pending.last_mut() {
-            if last.1 == style && !ch.is_control() {
-                last.0.push(ch);
-                return;
-            }
+        if let Some(last) = pending.last_mut()
+            && last.1 == style
+            && !ch.is_control()
+        {
+            last.0.push(ch);
+            return;
         }
         pending.push((ch.to_string(), style));
     }

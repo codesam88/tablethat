@@ -2,13 +2,25 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use tablethat_lib::{self as lib, ColorsConfig, Config};
 
+/// `serde_yaml` coerced YAML null to `""` for `String` fields; `serde_saphyr`
+/// rejects null for strings. Preserve the old leniency so files with empty
+/// values (e.g. `area: `) still load instead of being silently skipped.
+fn null_to_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
+}
+
 #[derive(Deserialize, Debug)]
 pub struct Task {
+    #[serde(deserialize_with = "null_to_empty_string")]
     pub status: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", deserialize_with = "null_to_empty_string")]
     pub task_type: String,
+    #[serde(deserialize_with = "null_to_empty_string")]
     pub priority: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_empty_string")]
     pub area: String,
 }
 
@@ -83,7 +95,7 @@ pub fn validate_all(root: &std::path::Path) -> bool {
             }
         };
 
-        let parsed: serde_json::Value = match serde_yaml::from_str(&frontmatter) {
+        let parsed: serde_json::Value = match serde_saphyr::from_str(&frontmatter) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("{}: FAIL — YAML parse error: {e}", path.display());
@@ -255,7 +267,7 @@ pub fn load_and_filter_tasks(
             Err(_) => continue,
         };
 
-        let task: Task = match serde_yaml::from_str(&frontmatter) {
+        let task: Task = match serde_saphyr::from_str(&frontmatter) {
             Ok(t) => t,
             Err(_) => continue,
         };
@@ -893,10 +905,10 @@ fn normalize_frontmatter(content: &str) -> Result<String, String> {
 
     let (fml, start_line) = parse_frontmatter(content)?;
 
-    let parsed: serde_yaml::Value =
-        serde_yaml::from_str(&fml).map_err(|e| format!("YAML parse error: {e}"))?;
+    let parsed: serde_json::Value =
+        serde_saphyr::from_str(&fml).map_err(|e| format!("YAML parse error: {e}"))?;
     let obj = parsed
-        .as_mapping()
+        .as_object()
         .ok_or("frontmatter must be a YAML mapping")?;
 
     let mut lines: Vec<String> = vec!["---".into()];
@@ -908,7 +920,7 @@ fn normalize_frontmatter(content: &str) -> Result<String, String> {
     }
 
     for (key, val) in obj.iter() {
-        let k = key.as_str().unwrap_or("invalid key");
+        let k = key.as_str();
         if CANONICAL_ORDER.contains(&k) {
             continue;
         }
@@ -938,12 +950,12 @@ fn normalize_frontmatter(content: &str) -> Result<String, String> {
     Ok(lines.join("\n") + "\n")
 }
 
-fn value_to_yaml_str(val: &serde_yaml::Value) -> String {
+fn value_to_yaml_str(val: &serde_json::Value) -> String {
     match val {
-        serde_yaml::Value::String(s) => s.clone(),
-        serde_yaml::Value::Bool(b) => b.to_string(),
-        serde_yaml::Value::Number(n) => n.to_string(),
-        _ => serde_yaml::to_string(val)
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => serde_saphyr::to_string(val)
             .unwrap_or_default()
             .trim()
             .to_string(),
@@ -1045,6 +1057,25 @@ pub fn normalize_all(root: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frontmatter_parses_with_pure_rust_backend() {
+        let fm = "status: open\ntype: bug\npriority: high\narea: backend\n";
+        let task: Task = serde_saphyr::from_str(fm).expect("saphyr backend parses Task");
+        assert_eq!(task.status, "open");
+        assert_eq!(task.task_type, "bug");
+        assert_eq!(task.priority, "high");
+        assert_eq!(task.area, "backend");
+    }
+
+    #[test]
+    fn frontmatter_null_area_parses_as_empty_string() {
+        // serde_yaml coerced YAML null (`area: `) to "" for String fields;
+        // serde_saphyr rejects it without the null_to_empty_string shim.
+        let fm = "status: open\ntype: bug\npriority: high\narea: \n";
+        let task: Task = serde_saphyr::from_str(fm).expect("null area parses");
+        assert_eq!(task.area, "");
+    }
 
     #[test]
     fn parse_frontmatter_valid() {
