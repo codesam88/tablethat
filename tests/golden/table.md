@@ -1,0 +1,6 @@
+| Name | Role | Note |
+|------|------|------|
+| Ada | Engineer | Loves tables |
+| Bob | Designer | Prefers prose |
+
+Text after the table.

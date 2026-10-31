@@ -1,0 +1,7 @@
+```rust
+fn main() {
+    let this_line_is_deliberately_far_too_long_to_fit_in_eighty_columns = true;
+}
+```
+
+A paragraph after the block.

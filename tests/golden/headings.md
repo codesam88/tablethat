@@ -1,0 +1,7 @@
+# Heading one
+
+## Heading two
+
+### Heading three
+
+Body under the headings with **bold** and *emphasis* and ~~struck~~ text.

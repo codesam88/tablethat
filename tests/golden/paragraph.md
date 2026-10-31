@@ -1,0 +1,7 @@
+# Wrapping prose
+
+This paragraph is long enough to wrap at eighty columns several times over,
+so the golden file pins where the breaks fall. It also carries a [link with
+text](http://example.com/some/path) mid-sentence and some `inline code`.
+
+A second, shorter paragraph.
