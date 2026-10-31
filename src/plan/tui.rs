@@ -62,6 +62,33 @@ fn confirm_quit(
     }
 }
 
+/// Split `text` into base-styled spans with case-insensitive `query`
+/// matches highlighted (yellow background). Empty query or no match yields
+/// one base span. Ranges come from [`crate::text::ci_match_ranges`], so
+/// multibyte text never panics slicing.
+fn highlight_spans(text: &str, query: &str, base: Style) -> Vec<Span<'static>> {
+    if query.is_empty() {
+        return vec![Span::styled(text.to_string(), base)];
+    }
+    let hl = base.bg(Color::Yellow);
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut last = 0;
+    for (s, e) in crate::text::ci_match_ranges(text, &query.to_lowercase()) {
+        if s > last {
+            out.push(Span::styled(text[last..s].to_string(), base));
+        }
+        out.push(Span::styled(text[s..e].to_string(), hl));
+        last = e;
+    }
+    if last < text.len() {
+        out.push(Span::styled(text[last..].to_string(), base));
+    }
+    if out.is_empty() {
+        out.push(Span::styled(text.to_string(), base));
+    }
+    out
+}
+
 /// Truncate a slug to display width `n`, appending … when shortened.
 /// Floors to a char boundary, so multibyte slugs never panic slicing.
 fn truncate_slug(slug: &str, n: usize) -> String {
@@ -93,6 +120,9 @@ struct App<'a> {
     filter_priority: Option<String>,
     filter_area: Option<String>,
     filter_search: Option<String>,
+    /// Live slug-substring filter from `/` search (titles only, unlike
+    /// `filter_search` which also matches bodies).
+    browse_title: Option<String>,
     hide_done: bool,
     esc_armed_at: Option<Instant>,
     mode: Mode,
@@ -152,6 +182,7 @@ impl<'a> App<'a> {
             filter_priority: None,
             filter_area: None,
             filter_search: None,
+            browse_title: None,
             hide_done: cfg.hide_done,
             esc_armed_at: None,
             mode: Mode::Browse,
@@ -192,6 +223,11 @@ impl<'a> App<'a> {
             self.filter_search.as_deref(),
             &exclude,
         );
+        // Live `/` search matches titles (slugs) only, never bodies.
+        if let Some(q) = &self.browse_title {
+            let ql = q.to_lowercase();
+            self.tasks.retain(|t| t.slug.to_lowercase().contains(&ql));
+        }
         let path_map: HashMap<String, PathBuf> = self
             .entries
             .iter()
@@ -214,7 +250,23 @@ impl<'a> App<'a> {
             || self.filter_priority.is_some()
             || self.filter_area.is_some()
             || self.filter_search.is_some()
+            || self.browse_title.is_some()
             || self.hide_done != self.cfg.hide_done
+    }
+
+    /// Clear every filter and reload. Used by `q`/Esc (never by search Esc,
+    /// which clears only the search itself).
+    fn clear_filters(&mut self) {
+        self.filter_status = None;
+        self.filter_type = None;
+        self.filter_priority = None;
+        self.filter_area = None;
+        self.filter_search = None;
+        self.browse_title = None;
+        self.search_query.clear();
+        self.search_mode = false;
+        self.hide_done = self.cfg.hide_done;
+        self.reload_tasks();
     }
 
     fn rebuild_columns(&mut self) {
@@ -621,14 +673,12 @@ impl App<'_> {
 
                     // Slug (field 3)
                     let slen = slot(slug_w);
-                    let slug = if is_act(3) {
+                    let s = if is_act(3) {
                         let n = slen.saturating_sub(2);
-                        let s = truncate_slug(&task.slug, n);
-                        format!("{:<w$}", format!("[{}]", s), w = slen)
+                        format!("[{}]", truncate_slug(&task.slug, n))
                     } else {
                         let n = slen.saturating_sub(1);
-                        let s = truncate_slug(&task.slug, n);
-                        format!("{:<w$}", format!(" {}", s), w = slen)
+                        format!(" {}", truncate_slug(&task.slug, n))
                     };
                     let slug_st = if is_sel && is_act(3) {
                         sel_act
@@ -637,7 +687,12 @@ impl App<'_> {
                     } else {
                         Style::default()
                     };
-                    spans.push(Span::styled(slug, slug_st));
+                    let mut slug_spans = highlight_spans(&s, &self.search_query, slug_st);
+                    let used: usize = slug_spans.iter().map(|sp| sp.content.len()).sum();
+                    if used < slen {
+                        slug_spans.push(Span::styled(" ".repeat(slen - used), slug_st));
+                    }
+                    spans.extend(slug_spans);
 
                     // Type (field 0)
                     let content = if is_act(0) {
@@ -719,14 +774,43 @@ impl App<'_> {
         frame.render_widget(Paragraph::new(lines).scroll((vert_scroll as u16, 0)), area);
     }
 
+    /// Search status line, shown INSTEAD of the status bar while typing
+    /// or filtered: bare `/` before the first keystroke, `/query (n)`
+    /// after. `None` when no search is active.
+    fn footer_search_line(&self) -> Option<String> {
+        if !self.search_mode && self.search_query.is_empty() {
+            return None;
+        }
+        if self.search_query.is_empty() {
+            return Some("/".to_string());
+        }
+        let n = self.tasks.len();
+        Some(format!(
+            "/{} ({} {})",
+            self.search_query,
+            n,
+            if n == 1 { "match" } else { "matches" }
+        ))
+    }
+
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        if let Some(line) = self.footer_search_line() {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    line,
+                    Style::default().fg(Color::Yellow),
+                ))),
+                area,
+            );
+            return;
+        }
         let done_hint = if self.hide_done {
             "h:show-done"
         } else {
             "h:hide-done"
         };
         let text = format!(
-            " Enter:view  f:filter  e:edit  {done_hint}  {}  Ctrl-c:quit ",
+            " Enter:view  f:filter  /:search  e:edit  {done_hint}  {}  Ctrl-c:quit ",
             if self.has_active_filters() {
                 "q:clear-filters"
             } else {
@@ -842,19 +926,19 @@ impl App<'_> {
                         if !matches!(key.code, KeyCode::Esc) {
                             self.esc_armed_at = None;
                         }
+                        // Filter-as-you-type search: handled separately so
+                        // Up/Down can confirm the filter and start moving.
+                        if self.search_mode {
+                            self.handle_search_key(key.code);
+                            return Ok(Action::None);
+                        }
                         return Ok(match key.code {
                             KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
                                 Action::Quit
                             }
                             KeyCode::Char('q') => {
                                 if self.has_active_filters() {
-                                    self.filter_status = None;
-                                    self.filter_type = None;
-                                    self.filter_priority = None;
-                                    self.filter_area = None;
-                                    self.filter_search = None;
-                                    self.hide_done = self.cfg.hide_done;
-                                    self.reload_tasks();
+                                    self.clear_filters();
                                     Action::None
                                 } else {
                                     Action::Quit
@@ -862,13 +946,7 @@ impl App<'_> {
                             }
                             KeyCode::Esc => {
                                 if self.has_active_filters() {
-                                    self.filter_status = None;
-                                    self.filter_type = None;
-                                    self.filter_priority = None;
-                                    self.filter_area = None;
-                                    self.filter_search = None;
-                                    self.hide_done = self.cfg.hide_done;
-                                    self.reload_tasks();
+                                    self.clear_filters();
                                     Action::None
                                 } else {
                                     let (quit, armed) =
@@ -901,6 +979,14 @@ impl App<'_> {
                                 Action::None
                             }
                             KeyCode::Char('e') if !self.columns.is_empty() => Action::OpenEditor,
+                            KeyCode::Char('/') => {
+                                self.search_mode = true;
+                                self.search_query.clear();
+                                self.filter_search = None;
+                                self.browse_title = None;
+                                self.reload_tasks();
+                                Action::None
+                            }
                             _ => {
                                 self.handle_task_key(key.code);
                                 Action::None
@@ -999,6 +1085,44 @@ impl App<'_> {
             .last()
             .map(|c| c.task_indices.len().saturating_sub(1))
             .unwrap_or(0);
+    }
+
+    fn apply_browse_search(&mut self) {
+        self.browse_title = if self.search_query.is_empty() {
+            None
+        } else {
+            Some(self.search_query.clone())
+        };
+        self.reload_tasks();
+    }
+
+    /// Search-mode keys: typing refilters live, Enter keeps the filter,
+    /// Esc clears it, Up/Down confirm it and start moving.
+    fn handle_search_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc => {
+                self.search_mode = false;
+                self.search_query.clear();
+                self.browse_title = None;
+                self.reload_tasks();
+            }
+            KeyCode::Enter => {
+                self.search_mode = false;
+            }
+            KeyCode::Up | KeyCode::Down => {
+                self.search_mode = false;
+                self.handle_task_key(code);
+            }
+            KeyCode::Backspace => {
+                self.search_query.pop();
+                self.apply_browse_search();
+            }
+            KeyCode::Char(ch) => {
+                self.search_query.push(ch);
+                self.apply_browse_search();
+            }
+            _ => {}
+        }
     }
 
     fn run_preview_search(&mut self) {
@@ -1226,5 +1350,173 @@ mod esc_tests {
         let (quit, armed) = confirm_quit(Some(t0), t1);
         assert!(!quit);
         assert_eq!(armed, Some(t1));
+    }
+}
+
+#[cfg(test)]
+mod highlight_tests {
+    use super::*;
+
+    fn plain(spans: &[Span]) -> Vec<(String, bool)> {
+        spans
+            .iter()
+            .map(|s| (s.content.to_string(), s.style.bg == Some(Color::Yellow)))
+            .collect()
+    }
+
+    #[test]
+    fn empty_query_yields_single_base_span() {
+        let spans = highlight_spans("my-task", "", Style::default());
+        assert_eq!(plain(&spans), vec![("my-task".to_string(), false)]);
+    }
+
+    #[test]
+    fn match_splits_span_with_highlighted_middle() {
+        let spans = highlight_spans("my-task", "task", Style::default());
+        assert_eq!(
+            plain(&spans),
+            vec![("my-".to_string(), false), ("task".to_string(), true),]
+        );
+    }
+
+    #[test]
+    fn no_match_yields_single_base_span() {
+        let spans = highlight_spans("my-task", "zzz", Style::default());
+        assert_eq!(plain(&spans), vec![("my-task".to_string(), false)]);
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+    use crate::plan::model::{LoadedTask, Task};
+    use crossterm::event::KeyCode;
+
+    fn task(status: &str, slug: &str) -> LoadedTask {
+        LoadedTask {
+            slug: slug.to_string(),
+            task: Task {
+                status: status.to_string(),
+                task_type: "feature".to_string(),
+                priority: "medium".to_string(),
+                area: String::new(),
+            },
+        }
+    }
+
+    fn task_file(dir: &std::path::Path, slug: &str, body: &str) -> PathBuf {
+        let path = dir.join(format!("{slug}.md"));
+        std::fs::write(
+            &path,
+            format!("---\nstatus: open\ntype: feature\npriority: medium\n---\n\n{body}\n"),
+        )
+        .unwrap();
+        path
+    }
+
+    fn app_with_files() -> (tempfile::TempDir, App<'static>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = task_file(tmp.path(), "abc", "nothing relevant here");
+        let b = task_file(tmp.path(), "xyz", "mentions abc in the body");
+        let cfg = Box::leak(Box::new(Config::default()));
+        let root = Box::leak(Box::new(tmp.path().to_path_buf()));
+        let mut app = App::new(root, cfg, Vec::new(), vec![a, b]);
+        app.reload_tasks();
+        (tmp, app)
+    }
+
+    #[test]
+    fn typing_filters_titles_only() {
+        let (_tmp, mut app) = app_with_files();
+        assert_eq!(app.tasks.len(), 2);
+        app.search_mode = true;
+        app.handle_search_key(KeyCode::Char('b'));
+        app.handle_search_key(KeyCode::Char('c'));
+        let slugs: Vec<&str> = app.tasks.iter().map(|t| t.slug.as_str()).collect();
+        // "xyz" matches 'b'/'c' only via its body — must be excluded.
+        assert_eq!(slugs, vec!["abc"]);
+    }
+
+    #[test]
+    fn backspace_to_empty_restores_all() {
+        let (_tmp, mut app) = app_with_files();
+        app.search_mode = true;
+        app.handle_search_key(KeyCode::Char('b'));
+        assert_eq!(app.tasks.len(), 1);
+        app.handle_search_key(KeyCode::Backspace);
+        assert_eq!(app.tasks.len(), 2);
+        assert!(app.browse_title.is_none());
+    }
+
+    #[test]
+    fn esc_clears_search_but_keeps_other_filters() {
+        let (_tmp, mut app) = app_with_files();
+        app.filter_priority = Some("medium".to_string());
+        app.search_mode = true;
+        app.handle_search_key(KeyCode::Char('b'));
+        assert_eq!(app.tasks.len(), 1);
+        app.handle_search_key(KeyCode::Esc);
+        assert!(!app.search_mode);
+        assert!(app.search_query.is_empty());
+        assert!(app.browse_title.is_none());
+        // Priority filter survives; both tasks are medium.
+        assert_eq!(app.tasks.len(), 2);
+    }
+
+    #[test]
+    fn up_confirms_filter_and_moves() {
+        let cfg = Box::leak(Box::new(Config::default()));
+        let root = Box::leak(Box::new(std::path::PathBuf::from("/tmp")));
+        let tasks = vec![task("in-progress", "aaa"), task("done", "zzz")];
+        let mut app = App::new(root, cfg, tasks, Vec::new());
+        app.search_mode = true;
+        app.search_query = "a".to_string();
+        app.browse_title = Some("a".to_string());
+        app.handle_search_key(KeyCode::Up);
+        assert!(!app.search_mode, "Up confirms the filter");
+        assert_eq!(app.browse_title.as_deref(), Some("a"), "filter kept");
+        let last = app.columns.len() - 1;
+        assert_eq!((app.selected_column, app.selected_task), (last, 0));
+    }
+
+    #[test]
+    fn footer_search_line_states() {
+        let cfg = Box::leak(Box::new(Config::default()));
+        let root = Box::leak(Box::new(std::path::PathBuf::from("/tmp")));
+        let mut app = App::new(root, cfg, vec![task("open", "aaa")], Vec::new());
+        assert_eq!(app.footer_search_line(), None);
+        app.search_mode = true;
+        assert_eq!(app.footer_search_line(), Some("/".to_string()));
+        app.search_query = "a".to_string();
+        assert_eq!(app.footer_search_line(), Some("/a (1 match)".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod clear_search_tests {
+    use super::*;
+    use crate::plan::model::{LoadedTask, Task};
+
+    #[test]
+    fn clear_filters_resets_search_ui() {
+        let cfg = Box::leak(Box::new(Config::default()));
+        let root = Box::leak(Box::new(std::path::PathBuf::from("/tmp")));
+        let tasks = vec![LoadedTask {
+            slug: "aaa".to_string(),
+            task: Task {
+                status: "open".to_string(),
+                task_type: "feature".to_string(),
+                priority: "medium".to_string(),
+                area: String::new(),
+            },
+        }];
+        let mut app = App::new(root, cfg, tasks, Vec::new());
+        // Kept-filter state: typing done, filter applied.
+        app.search_query = "a".to_string();
+        app.browse_title = Some("a".to_string());
+        app.clear_filters();
+        assert!(app.search_query.is_empty(), "query must clear");
+        assert!(app.browse_title.is_none(), "filter must clear");
+        assert_eq!(app.footer_search_line(), None, "bar must revert");
     }
 }
