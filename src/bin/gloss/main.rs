@@ -39,7 +39,13 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    let cfg = lib::Config::load("gloss", "GLOSS_", cli.config.as_deref());
+    let cfg = match lib::Config::try_load("gloss", "GLOSS_", cli.config.as_deref()) {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!("gloss: {err}");
+            std::process::exit(1);
+        }
+    };
     let themes = lib::theme::load_themes(cfg.themes_dir.as_deref(), "gloss");
     let default_width = crossterm::terminal::size()
         .map(|(cols, _)| cols as usize)

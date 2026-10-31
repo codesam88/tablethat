@@ -14,7 +14,26 @@ pub struct ThemeFile {
 /// 1. Explicit `themes_dir` path
 /// 2. `./themes/` relative to cwd
 /// 3. `~/.config/<app_name>/themes/`
+///
+/// Thin wrapper over [`load_themes_with_errors`] that warns on stderr for
+/// each skipped file.
 pub fn load_themes(themes_dir: Option<&Path>, app_name: &str) -> Vec<ThemeFile> {
+    let (themes, errors) = load_themes_with_errors(themes_dir, app_name);
+    for (path, reason) in &errors {
+        eprintln!(
+            "warning: skipping invalid theme file {}: {reason}",
+            path.display()
+        );
+    }
+    themes
+}
+
+/// Like [`load_themes`], but also returns the files that failed to load
+/// as `(path, reason)` pairs instead of only warning about them.
+pub fn load_themes_with_errors(
+    themes_dir: Option<&Path>,
+    app_name: &str,
+) -> (Vec<ThemeFile>, Vec<(PathBuf, String)>) {
     let dirs: Vec<PathBuf> = if let Some(dir) = themes_dir {
         vec![dir.to_path_buf()]
     } else {
@@ -26,6 +45,7 @@ pub fn load_themes(themes_dir: Option<&Path>, app_name: &str) -> Vec<ThemeFile> 
     };
 
     let mut themes = Vec::new();
+    let mut errors = Vec::new();
     for dir in &dirs {
         if !dir.is_dir() {
             continue;
@@ -40,10 +60,12 @@ pub fn load_themes(themes_dir: Option<&Path>, app_name: &str) -> Vec<ThemeFile> 
         entries.sort();
 
         for path in entries {
-            if let Ok(content) = std::fs::read_to_string(&path)
-                && let Ok(theme) = toml::from_str::<ThemeFile>(&content)
-            {
-                themes.push(theme);
+            match std::fs::read_to_string(&path) {
+                Ok(content) => match toml::from_str::<ThemeFile>(&content) {
+                    Ok(theme) => themes.push(theme),
+                    Err(e) => errors.push((path, e.to_string())),
+                },
+                Err(e) => errors.push((path, e.to_string())),
             }
         }
         if !themes.is_empty() {
@@ -58,7 +80,7 @@ pub fn load_themes(themes_dir: Option<&Path>, app_name: &str) -> Vec<ThemeFile> 
         });
     }
 
-    themes
+    (themes, errors)
 }
 
 #[cfg(test)]
@@ -92,6 +114,45 @@ mod tests {
         let themes = load_themes(Some(Path::new("/nonexistent/path")), "plan");
         assert_eq!(themes.len(), 1);
         assert_eq!(themes[0].name, "default");
+    }
+
+    #[test]
+    fn load_themes_with_errors_keeps_good_and_reports_bad() {
+        let dir = std::env::temp_dir().join(format!("tablethat_theme_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp themes dir");
+
+        // One well-formed theme file.
+        let good = ThemeFile {
+            name: "good".into(),
+            theme: ThemeConfig::default(),
+        };
+        let good_path = dir.join("good.toml");
+        std::fs::write(&good_path, toml::to_string(&good).expect("serialize theme"))
+            .expect("write good theme");
+
+        // One malformed theme file.
+        let bad_path = dir.join("bad.toml");
+        std::fs::write(&bad_path, "this is [[[ not valid toml").expect("write bad theme");
+
+        let (themes, errors) = load_themes_with_errors(Some(&dir), "plan");
+
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            themes.iter().any(|t| t.name == "good"),
+            "good theme should load, got: {:?}",
+            themes.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            errors.len(),
+            1,
+            "bad theme should be reported once: {errors:?}"
+        );
+        assert_eq!(
+            errors[0].0, bad_path,
+            "reported path should be the bad file"
+        );
+        assert!(!errors[0].1.is_empty(), "error should carry a reason");
     }
 
     #[test]

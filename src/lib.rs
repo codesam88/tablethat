@@ -128,41 +128,82 @@ impl Default for PriorityColors {
     }
 }
 
+/// Validate that `path` exists and contains parseable TOML, returning a
+/// human-readable reason on failure. Used to give per-file error messages
+/// before handing the file to figment (whose merge errors are lazy).
+fn check_toml_file(path: &Path) -> Result<(), String> {
+    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    toml::from_str::<toml::Value>(&content).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 impl Config {
     /// Load configuration with layered precedence:
     /// defaults < config file < env vars < CLI overrides
     ///
     /// `app_name` is used for config file search paths (e.g. "plan" → plan.toml)
     /// `env_prefix` is used for environment variable filtering (e.g. "PLAN_")
-    pub fn load(app_name: &str, env_prefix: &str, cli_config_path: Option<&Path>) -> Self {
+    ///
+    /// Error contract:
+    /// - An explicit `cli_config_path` that is missing, unparseable, or
+    ///   type-invalid produces `Err` naming the file — never a silent default.
+    /// - Auto-detected config files (env var / project-local / config dir)
+    ///   that are bad warn on stderr and are skipped; extraction failures
+    ///   fall back to defaults (with a stderr warning).
+    pub fn try_load(
+        app_name: &str,
+        env_prefix: &str,
+        cli_config_path: Option<&Path>,
+    ) -> Result<Self, String> {
         let mut figment = Figment::from(Serialized::defaults(Config::default()));
 
         // Layer 1: config file(s)
         if let Some(path) = cli_config_path {
-            if path.exists() {
-                figment = figment.merge(Toml::file(path));
-            }
+            check_toml_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            figment = figment.merge(Toml::file(path));
         } else {
             // Env var for config path
             let config_env_key = format!("{env_prefix}CONFIG");
             if let Ok(path) = std::env::var(&config_env_key) {
                 let p = PathBuf::from(&path);
-                if p.exists() {
-                    figment = figment.merge(Toml::file(p));
+                if p.is_file() {
+                    match check_toml_file(&p) {
+                        Ok(()) => figment = figment.merge(Toml::file(&p)),
+                        Err(e) => {
+                            eprintln!("warning: ignoring invalid config file {}: {e}", p.display())
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "warning: {config_env_key} points to missing config file: {}",
+                        p.display()
+                    );
                 }
             }
 
             // Project-local
             let local = PathBuf::from(format!("{app_name}.toml"));
-            if local.exists() {
-                figment = figment.merge(Toml::file(local));
+            if local.is_file() {
+                match check_toml_file(&local) {
+                    Ok(()) => figment = figment.merge(Toml::file(&local)),
+                    Err(e) => eprintln!(
+                        "warning: ignoring invalid config file {}: {e}",
+                        local.display()
+                    ),
+                }
             }
 
             // Platform config dir
             if let Some(proj_dirs) = directories::ProjectDirs::from("", "", app_name) {
                 let sys_config = proj_dirs.config_dir().join("config.toml");
-                if sys_config.exists() {
-                    figment = figment.merge(Toml::file(sys_config));
+                if sys_config.is_file() {
+                    match check_toml_file(&sys_config) {
+                        Ok(()) => figment = figment.merge(Toml::file(&sys_config)),
+                        Err(e) => eprintln!(
+                            "warning: ignoring invalid config file {}: {e}",
+                            sys_config.display()
+                        ),
+                    }
                 }
             }
         }
@@ -170,7 +211,17 @@ impl Config {
         // Layer 2: environment variables
         figment = figment.merge(Env::prefixed(env_prefix));
 
-        figment.extract().unwrap_or_default()
+        match figment.extract::<Config>() {
+            Ok(cfg) => Ok(cfg),
+            Err(err) => {
+                if let Some(path) = cli_config_path {
+                    Err(format!("{}: {err}", path.display()))
+                } else {
+                    eprintln!("warning: falling back to default config: {err}");
+                    Ok(Config::default())
+                }
+            }
+        }
     }
 }
 
@@ -390,5 +441,82 @@ mod tests {
         assert_eq!(theme.code_block_color, Color::Yellow);
         assert_eq!(theme.bold_style, "bold");
         assert_eq!(theme.emphasis_style, "underlined");
+    }
+
+    // ---- try_load tests ----------------------------------------------------
+
+    /// Helper: unique temp file path for config tests (no tempfile dep).
+    fn temp_config_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tablethat_cfg_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp config dir");
+        dir.join(name)
+    }
+
+    #[test]
+    fn try_load_explicit_missing_file_is_err() {
+        let missing = Path::new("/nonexistent/tablethat-should-not-exist.toml");
+        let result = Config::try_load("plan", "PLAN_", Some(missing));
+        let err = result.expect_err("explicit missing --config path must be an error");
+        assert!(
+            err.contains("should-not-exist.toml"),
+            "error should mention the path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn try_load_explicit_invalid_toml_is_err() {
+        let path = temp_config_path("invalid.toml");
+        std::fs::write(&path, "this is [[[ not valid toml").expect("write invalid toml");
+        let result = Config::try_load("plan", "PLAN_", Some(&path));
+        let err = result.expect_err("explicit invalid --config TOML must be an error");
+        assert!(
+            err.contains("invalid.toml"),
+            "error should mention the path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn try_load_explicit_wrong_type_is_err() {
+        let path = temp_config_path("wrong_type.toml");
+        std::fs::write(&path, "width = \"not-a-number\"").expect("write wrong-type toml");
+        let result = Config::try_load("plan", "PLAN_", Some(&path));
+        let err = result.expect_err("explicit --config with wrong value type must be an error");
+        assert!(
+            err.contains("wrong_type.toml"),
+            "error should mention the path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn try_load_explicit_valid_toml_is_ok() {
+        let path = temp_config_path("valid.toml");
+        std::fs::write(&path, "width = 42").expect("write valid toml");
+        let cfg = Config::try_load("plan", "PLAN_", Some(&path))
+            .expect("explicit valid --config must load");
+        assert_eq!(cfg.width, 42);
+    }
+
+    #[test]
+    fn try_load_auto_bad_toml_warns_and_falls_back_to_defaults() {
+        let path = temp_config_path("auto_bad.toml");
+        std::fs::write(&path, "this is [[[ not valid toml").expect("write invalid toml");
+        // Unique prefix so the env var can't collide with real user config.
+        unsafe { std::env::set_var("TESTAUTOBAD_CONFIG", &path) };
+        let result = Config::try_load("testautobad", "TESTAUTOBAD_", None);
+        unsafe { std::env::remove_var("TESTAUTOBAD_CONFIG") };
+        let cfg = result.expect("auto-detected bad TOML must warn, not fail");
+        // Bad file skipped => built-in defaults remain.
+        assert_eq!(cfg.width, Config::default().width);
+    }
+
+    #[test]
+    fn try_load_auto_valid_toml_merges() {
+        let path = temp_config_path("auto_good.toml");
+        std::fs::write(&path, "width = 55").expect("write valid toml");
+        unsafe { std::env::set_var("TESTAUTOGOOD_CONFIG", &path) };
+        let result = Config::try_load("testautogood", "TESTAUTOGOOD_", None);
+        unsafe { std::env::remove_var("TESTAUTOGOOD_CONFIG") };
+        let cfg = result.expect("auto-detected valid TOML must load");
+        assert_eq!(cfg.width, 55);
     }
 }

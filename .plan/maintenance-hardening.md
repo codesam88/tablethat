@@ -31,7 +31,7 @@ Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawba
 - [x] Step 1 (1B): `serde_yaml@0.9` -> `serde-saphyr@2`. Scope: `Cargo.toml`, `src/plan/tasks.rs` (`from_str`, `Value`, `to_string`). Done: `cargo deny check` passes, `just precommit` green, frontmatter round-trip tests pass. Leaves out: MSRV CI pin (DevOps item).
 - [x] Step 2 (3A+B): slug validation + traversal guard + TDD tests.
 - [x] Step 3 (4A+B): gloss resolution + editor splitting.
-- [ ] Step 4 (5A+B): config/theme warnings + `Result` propagation.
+- [x] Step 4 (5A+B): config/theme warnings + `Result` propagation.
 - [ ] Step 5 (6A+B+C): workflow permissions + dependabot + release attestation.
 - [ ] Step 6 (2A): verify `lru` fix upstream, `cargo update -p ratatui`.
 
@@ -63,6 +63,7 @@ Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawba
 
 ## Progress (newest first)
 
+- 2026-10-31: Step 4 DONE via worker (reviewed by parent). `Config::load` replaced by `try_load -> Result` (explicit `--config` missing/unparseable exits 1 with path; auto-detect warns + skips). `load_themes_with_errors` reports bad TOML, wrapper warns (all 3 callers covered). 7 new tests, 82 total pass, deny green, no old callers remain.
 - 2026-10-31: Step 3 DONE via worker (reviewed by parent). New `src/launch.rs` in lib: `split_editor_cmd`/`editor_command` via `shell-words@1.1.1`, `resolve_gloss_program` via `current_exe` sibling + PATH fallback (+`.exe` handling). All 4 sinks rewired, no-shell invariant kept. 9 new tests, 75 total pass, deny green. Leftover: `Config.editor` still unused (decide in Step 4).
 - 2026-10-31: Step 2 DONE via worker (reviewed by parent). `is_valid_slug` (`^[a-z0-9]+(?:-[a-z0-9]+)*$`, no leading/trailing `-`) enforced in `create_task` before any fs touch + `strip_prefix` defense-in-depth. RED observed (traversal files created pre-fix, incl. escape proof), 5 new tests, 66 total pass, clippy/fmt clean.
 - 2026-10-31: Step 1 DONE via worker (reviewed by parent). `serde_yaml` removed, `serde-saphyr@2` + `preserve_order` + `BSD-3-Clause` license. Null-to-empty shim preserves `area: ` leniency (regression test added). `unsafe-libyaml` gone from tree, `deny` green, audit down to 1 warning (`lru`, accepted per 2A). 61 tests pass. Parent also fixed pre-existing `collapsible_if` clippy lint in `markdown.rs:107` (stable-toolchain drift, unrelated to migration).

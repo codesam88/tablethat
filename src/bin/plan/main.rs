@@ -171,7 +171,13 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
 
-    let mut cfg = lib::Config::load("plan", "PLAN_", cli.config.as_deref());
+    let mut cfg = match lib::Config::try_load("plan", "PLAN_", cli.config.as_deref()) {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!("plan: {err}");
+            std::process::exit(1);
+        }
+    };
     if cli.root.is_some() {
         cfg.root = cli.root;
     }
