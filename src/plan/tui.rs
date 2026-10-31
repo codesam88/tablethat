@@ -35,8 +35,8 @@ struct App<'a> {
     root: &'a Path,
     cfg: &'a Config,
     entries: Vec<PathBuf>,
-    all_tasks: Vec<crate::plan::tasks::LoadedTask>,
-    tasks: Vec<crate::plan::tasks::LoadedTask>,
+    all_tasks: Vec<crate::plan::model::LoadedTask>,
+    tasks: Vec<crate::plan::model::LoadedTask>,
     task_paths: HashMap<String, PathBuf>,
     columns: Vec<Column>,
     selected_column: usize,
@@ -71,7 +71,7 @@ impl<'a> App<'a> {
     fn new(
         root: &'a Path,
         cfg: &'a Config,
-        tasks: Vec<crate::plan::tasks::LoadedTask>,
+        tasks: Vec<crate::plan::model::LoadedTask>,
         entries: Vec<PathBuf>,
     ) -> Self {
         let path_map: HashMap<String, PathBuf> = entries
@@ -85,7 +85,7 @@ impl<'a> App<'a> {
 
         // Load all tasks unfiltered for hidden-count display
         let all_tasks =
-            crate::plan::tasks::load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
+            crate::plan::query::load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
 
         let themes = lib::theme::load_themes(cfg.themes_dir.as_deref(), "plan");
 
@@ -127,7 +127,7 @@ impl<'a> App<'a> {
 
     fn sort_tasks(&mut self) {
         self.tasks
-            .sort_by(|a, b| crate::plan::tasks::cmp_tasks(a, b, &[], &self.cfg.kanban_order));
+            .sort_by(|a, b| crate::plan::query::cmp_tasks(a, b, &[], &self.cfg.kanban_order));
     }
 
     fn reload_tasks(&mut self) {
@@ -136,7 +136,7 @@ impl<'a> App<'a> {
         } else {
             vec![]
         };
-        self.tasks = crate::plan::tasks::load_and_filter_tasks(
+        self.tasks = crate::plan::query::load_and_filter_tasks(
             &self.entries,
             self.filter_status.as_deref(),
             self.filter_type.as_deref(),
@@ -215,7 +215,7 @@ pub fn run_tui(
     } else {
         vec![]
     };
-    let tasks = crate::plan::tasks::load_and_filter_tasks(
+    let tasks = crate::plan::query::load_and_filter_tasks(
         &entries,
         status_filter,
         type_filter,

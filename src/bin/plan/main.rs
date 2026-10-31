@@ -295,7 +295,7 @@ fn main() {
         }
         Some(Commands::Lint) => {
             let mut warnings = Vec::new();
-            match tablethat_lib::plan::tasks::validate_all(&root, &mut warnings) {
+            match tablethat_lib::plan::lint::validate_all(&root, &mut warnings) {
                 Ok(()) => {}
                 Err(errors) => {
                     for e in &errors {

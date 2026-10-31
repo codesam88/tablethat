@@ -1,181 +1,6 @@
+use super::model::{LoadedTask, parse_frontmatter};
 use crate::{self as lib, ColorsConfig, Config};
-use serde::Deserialize;
 use std::path::PathBuf;
-
-/// `serde_yaml` coerced YAML null to `""` for `String` fields; `serde_saphyr`
-/// rejects null for strings. Preserve the old leniency so files with empty
-/// values (e.g. `area: `) still load instead of being silently skipped.
-fn null_to_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Task {
-    #[serde(deserialize_with = "null_to_empty_string")]
-    pub status: String,
-    #[serde(rename = "type", deserialize_with = "null_to_empty_string")]
-    pub task_type: String,
-    #[serde(deserialize_with = "null_to_empty_string")]
-    pub priority: String,
-    #[serde(default, deserialize_with = "null_to_empty_string")]
-    pub area: String,
-}
-
-pub struct LoadedTask {
-    pub slug: String,
-    pub task: Task,
-}
-
-/// Validate every task file against the resolved schema.
-///
-/// Diagnostics are returned, never printed: `Ok(())` carries no news,
-/// `Err(errors)` carries one line per failure. Non-fatal notes (unknown
-/// keys, empty tree) go into `warnings`. Callers decide presentation
-/// and exit codes.
-pub fn validate_all(root: &std::path::Path, warnings: &mut Vec<String>) -> Result<(), Vec<String>> {
-    let tasks_dir = root.join(lib::PLAN_DIR);
-
-    let schema_path = match lib::resolve_file(root, ".plan", ".schema.json", "schema.json", "plan")
-    {
-        Some(p) => p,
-        None => {
-            return Err(vec![
-                "error: no schema found (searched .plan/.schema.json, config dir, data dir)".into(),
-            ]);
-        }
-    };
-
-    let schema: serde_json::Value = match std::fs::read_to_string(&schema_path)
-        .map_err(|e| format!("{}: cannot read — {e}", schema_path.display()))
-        .and_then(|s| {
-            serde_json::from_str(&s)
-                .map_err(|e| format!("{}: invalid JSON — {e}", schema_path.display()))
-        }) {
-        Ok(v) => v,
-        Err(e) => return Err(vec![e]),
-    };
-
-    let required: Vec<&str> = schema["required"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
-
-    let properties = schema["properties"].as_object();
-
-    let entries = match read_task_files(&tasks_dir) {
-        Ok(v) => v,
-        Err(e) => return Err(vec![e]),
-    };
-
-    if entries.is_empty() {
-        warnings.push(format!(
-            "warning: no task files found in {}",
-            tasks_dir.display()
-        ));
-    }
-
-    let mut errors: Vec<String> = Vec::new();
-
-    for path in &entries {
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(e) => {
-                errors.push(format!("{}: FAIL — cannot read: {e}", path.display()));
-                continue;
-            }
-        };
-
-        let (frontmatter, line) = match parse_frontmatter(&content) {
-            Ok(fm) => fm,
-            Err(msg) => {
-                errors.push(format!("{}: FAIL — {msg}", path.display()));
-                continue;
-            }
-        };
-
-        let parsed: serde_json::Value = match serde_saphyr::from_str(&frontmatter) {
-            Ok(v) => v,
-            Err(e) => {
-                errors.push(format!("{}: FAIL — YAML parse error: {e}", path.display()));
-                continue;
-            }
-        };
-
-        let Some(obj) = parsed.as_object() else {
-            errors.push(format!(
-                "{}: FAIL — frontmatter must be a YAML mapping",
-                path.display()
-            ));
-            continue;
-        };
-
-        for field in &required {
-            if !obj.contains_key(*field) {
-                errors.push(format!(
-                    "{}: FAIL — missing required field '{field}'",
-                    path.display()
-                ));
-            }
-        }
-
-        if let Some(props) = properties {
-            for (key, prop_schema) in props {
-                let Some(val) = obj.get(key) else { continue };
-
-                if let Some(allowed) = prop_schema["enum"].as_array() {
-                    if let Some(s) = val.as_str() {
-                        let found = allowed.iter().any(|a| a.as_str() == Some(s));
-                        if !found {
-                            let values: Vec<&str> =
-                                allowed.iter().filter_map(|a| a.as_str()).collect();
-                            errors.push(format!(
-                                "{}: FAIL — '{key}' must be one of [{}], got '{s}'",
-                                path.display(),
-                                values.join(", ")
-                            ));
-                        }
-                    } else {
-                        errors.push(format!(
-                            "{}: FAIL — '{key}' must be a string, got {val}",
-                            path.display()
-                        ));
-                    }
-                }
-            }
-        }
-
-        let unknown_keys: Vec<&String> = obj
-            .keys()
-            .filter(|k| {
-                !required.contains(&k.as_str())
-                    && !properties.is_some_and(|p| p.contains_key(k.as_str()))
-            })
-            .collect();
-
-        for k in unknown_keys {
-            if line > 0 {
-                warnings.push(format!(
-                    "{}:{line}: WARNING — unknown frontmatter key '{k}'",
-                    path.display()
-                ));
-            } else {
-                warnings.push(format!(
-                    "{}: WARNING — unknown frontmatter key '{k}'",
-                    path.display()
-                ));
-            }
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 pub fn list_tasks(
@@ -190,7 +15,7 @@ pub fn list_tasks(
     sort_keys: &[String],
 ) {
     let mut lint_warnings = Vec::new();
-    match validate_all(root, &mut lint_warnings) {
+    match super::lint::validate_all(root, &mut lint_warnings) {
         Ok(()) => {}
         Err(lint_errors) => {
             for e in &lint_errors {
@@ -212,13 +37,14 @@ pub fn list_tasks(
         }
     };
 
-    let all_tasks = load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
+    let all_tasks =
+        super::query::load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
     let exclude: Vec<String> = if cfg.hide_done {
         vec!["done".into()]
     } else {
         vec![]
     };
-    let mut tasks = load_and_filter_tasks(
+    let mut tasks = super::query::load_and_filter_tasks(
         &entries,
         status_filter,
         type_filter,
@@ -238,7 +64,7 @@ pub fn list_tasks(
     } else {
         sort_keys.to_vec()
     };
-    tasks.sort_by(|a, b| cmp_tasks(a, b, &effective_sort, &cfg.kanban_order));
+    tasks.sort_by(|a, b| super::query::cmp_tasks(a, b, &effective_sort, &cfg.kanban_order));
 
     if kanban {
         display_kanban(
@@ -251,153 +77,6 @@ pub fn list_tasks(
         );
     } else {
         display_table(&tasks, &cfg.colors);
-    }
-}
-
-pub fn load_and_filter_tasks(
-    entries: &[PathBuf],
-    status_filter: Option<&str>,
-    type_filter: Option<&str>,
-    priority_filter: Option<&str>,
-    area_filter: Option<&str>,
-    search_query: Option<&str>,
-    statuses_to_exclude: &[String],
-) -> Vec<LoadedTask> {
-    let mut tasks: Vec<LoadedTask> = Vec::new();
-
-    for path in entries {
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let (frontmatter, _) = match parse_frontmatter(&content) {
-            Ok(fm) => fm,
-            Err(_) => continue,
-        };
-
-        let task: Task = match serde_saphyr::from_str(&frontmatter) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-
-        let slug = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        let body_start = content
-            .lines()
-            .enumerate()
-            .skip_while(|(_, l)| l.trim() != "---")
-            .skip(1)
-            .find(|(_, l)| l.trim() == "---")
-            .map(|(i, _)| i + 1)
-            .unwrap_or(0);
-
-        let body = if body_start > 0 {
-            content
-                .lines()
-                .skip(body_start)
-                .collect::<Vec<_>>()
-                .join("\n")
-                .trim()
-                .to_string()
-        } else {
-            String::new()
-        };
-
-        if statuses_to_exclude.contains(&task.status) {
-            continue;
-        }
-        if let Some(s) = status_filter
-            && task.status != s
-        {
-            continue;
-        }
-        if let Some(t) = type_filter
-            && task.task_type != t
-        {
-            continue;
-        }
-        if let Some(p) = priority_filter
-            && task.priority != p
-        {
-            continue;
-        }
-        if let Some(a) = area_filter
-            && task.area != a
-        {
-            continue;
-        }
-        if let Some(q) = search_query {
-            let q_lower = q.to_lowercase();
-            if !slug.to_lowercase().contains(&q_lower) && !body.to_lowercase().contains(&q_lower) {
-                continue;
-            }
-        }
-
-        tasks.push(LoadedTask { slug, task });
-    }
-
-    tasks
-}
-
-pub fn cmp_tasks(
-    a: &LoadedTask,
-    b: &LoadedTask,
-    sort_keys: &[String],
-    kanban_order: &[String],
-) -> std::cmp::Ordering {
-    let keys: &[String] = if sort_keys.is_empty() {
-        &["priority".into(), "slug".into()]
-    } else {
-        sort_keys
-    };
-
-    for key in keys {
-        let ord = cmp_by_key(a, b, key, kanban_order);
-        if ord != std::cmp::Ordering::Equal {
-            return ord;
-        }
-    }
-    std::cmp::Ordering::Equal
-}
-
-pub fn cmp_by_key(
-    a: &LoadedTask,
-    b: &LoadedTask,
-    key: &str,
-    kanban_order: &[String],
-) -> std::cmp::Ordering {
-    match key {
-        "status" => {
-            let oa = kanban_ord(&a.task.status, kanban_order);
-            let ob = kanban_ord(&b.task.status, kanban_order);
-            oa.cmp(&ob)
-        }
-        "type" => a.task.task_type.cmp(&b.task.task_type),
-        "priority" => priority_ord(&a.task.priority).cmp(&priority_ord(&b.task.priority)),
-        "area" => a.task.area.cmp(&b.task.area),
-        "slug" => a.slug.cmp(&b.slug),
-        _ => std::cmp::Ordering::Equal,
-    }
-}
-
-fn kanban_ord(status: &str, kanban_order: &[String]) -> u8 {
-    kanban_order
-        .iter()
-        .position(|s| s == status)
-        .map_or(99, |i| i as u8)
-}
-
-fn priority_ord(p: &str) -> u8 {
-    match p {
-        "high" => 0,
-        "medium" => 1,
-        "low" => 2,
-        _ => 3,
     }
 }
 
@@ -446,7 +125,7 @@ fn display_kanban(
     for status in kanban_order {
         let mut group: Vec<&LoadedTask> =
             tasks.iter().filter(|t| &t.task.status == status).collect();
-        group.sort_by(|a, b| cmp_tasks(a, b, sort_keys, kanban_order));
+        group.sort_by(|a, b| super::query::cmp_tasks(a, b, sort_keys, kanban_order));
         total += group.len();
         groups.push((status, group));
     }
@@ -771,28 +450,6 @@ pub fn resolve_single_slug(root: &std::path::Path, query: &str) -> Option<PathBu
     }
 }
 
-fn parse_frontmatter(content: &str) -> Result<(String, usize), String> {
-    let mut lines = content.lines().enumerate();
-
-    let Some((first_line, _)) = lines.find(|(_, l)| l.trim() == "---") else {
-        return Err("no frontmatter delimiters found".into());
-    };
-
-    let Some((second_line, _)) = lines.find(|(_, l)| l.trim() == "---") else {
-        return Err("unclosed frontmatter (missing closing ---)".into());
-    };
-
-    let start = first_line + 1;
-    let end = second_line;
-
-    if start >= end {
-        return Err("empty frontmatter".into());
-    }
-
-    let frontmatter: Vec<&str> = content.lines().skip(start).take(end - start).collect();
-    Ok((frontmatter.join("\n"), first_line + 1))
-}
-
 pub fn init_plan(root: &std::path::Path) {
     let plan_dir = root.join(".plan");
     if plan_dir.exists() {
@@ -1062,162 +719,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frontmatter_parses_with_pure_rust_backend() {
-        let fm = "status: open\ntype: bug\npriority: high\narea: backend\n";
-        let task: Task = serde_saphyr::from_str(fm).expect("saphyr backend parses Task");
-        assert_eq!(task.status, "open");
-        assert_eq!(task.task_type, "bug");
-        assert_eq!(task.priority, "high");
-        assert_eq!(task.area, "backend");
-    }
-
-    #[test]
-    fn frontmatter_null_area_parses_as_empty_string() {
-        // serde_yaml coerced YAML null (`area: `) to "" for String fields;
-        // serde_saphyr rejects it without the null_to_empty_string shim.
-        let fm = "status: open\ntype: bug\npriority: high\narea: \n";
-        let task: Task = serde_saphyr::from_str(fm).expect("null area parses");
-        assert_eq!(task.area, "");
-    }
-
-    #[test]
-    fn parse_frontmatter_valid() {
-        let md = "---\nstatus: open\ntype: bug\n---\n\nbody text";
-        let (fm, line) = parse_frontmatter(md).unwrap();
-        assert_eq!(fm, "status: open\ntype: bug");
-        assert_eq!(line, 1);
-    }
-
-    #[test]
-    fn parse_frontmatter_no_delimiters() {
-        let md = "just text";
-        assert!(parse_frontmatter(md).is_err());
-    }
-
-    #[test]
-    fn parse_frontmatter_unclosed() {
-        let md = "---\nstatus: open\n";
-        assert!(parse_frontmatter(md).is_err());
-    }
-
-    #[test]
-    fn parse_frontmatter_empty() {
-        let md = "---\n---\nbody";
-        assert!(parse_frontmatter(md).is_err());
-    }
-
-    #[test]
-    fn parse_frontmatter_dashes_in_body() {
-        let md =
-            "---\nstatus: open\ntype: bug\npriority: high\n---\n\nA --- separator in body text.";
-        let (fm, _) = parse_frontmatter(md).unwrap();
-        assert!(fm.contains("status: open"));
-    }
-
-    #[test]
-    fn parse_frontmatter_only_frontmatter_no_body() {
-        let md = "---\nstatus: done\ntype: chore\npriority: low\n---";
-        let (fm, _) = parse_frontmatter(md).unwrap();
-        assert_eq!(fm, "status: done\ntype: chore\npriority: low");
-    }
-
-    #[test]
-    fn parse_frontmatter_with_trailing_newlines() {
-        let md = "---\nstatus: open\n---\n\n\n\n";
-        let (fm, _) = parse_frontmatter(md).unwrap();
-        assert_eq!(fm, "status: open");
-    }
-
-    fn make_task(status: &str, typ: &str, priority: &str, area: &str, slug: &str) -> LoadedTask {
-        LoadedTask {
-            slug: slug.to_string(),
-            task: Task {
-                status: status.to_string(),
-                task_type: typ.to_string(),
-                priority: priority.to_string(),
-                area: area.to_string(),
-            },
-        }
-    }
-
-    #[test]
-    fn cmp_default_sorts_priority_then_slug() {
-        let a = make_task("open", "bug", "medium", "", "alpha");
-        let b = make_task("open", "feature", "high", "", "beta");
-        let empty: [String; 0] = [];
-        let ko: Vec<String> = vec![
-            "idea".into(),
-            "backlog".into(),
-            "open".into(),
-            "in-progress".into(),
-            "blocked".into(),
-            "done".into(),
-        ];
-        assert_eq!(cmp_tasks(&a, &b, &empty, &ko), std::cmp::Ordering::Greater);
-        assert_eq!(cmp_tasks(&b, &a, &empty, &ko), std::cmp::Ordering::Less);
-    }
-
-    #[test]
-    fn cmp_default_tiebreak_by_slug() {
-        let a = make_task("open", "bug", "high", "", "alpha");
-        let b = make_task("open", "feature", "high", "", "beta");
-        let empty: [String; 0] = [];
-        let ko: Vec<String> = vec![
-            "idea".into(),
-            "backlog".into(),
-            "open".into(),
-            "in-progress".into(),
-            "blocked".into(),
-            "done".into(),
-        ];
-        assert_eq!(cmp_tasks(&a, &b, &empty, &ko), std::cmp::Ordering::Less);
-    }
-
-    #[test]
-    fn cmp_sorts_by_area_then_priority() {
-        let a = make_task("open", "bug", "high", "backend", "x");
-        let b = make_task("open", "feature", "low", "frontend", "x");
-        let keys = ["area".into(), "priority".into()];
-        let ko: Vec<String> = vec![
-            "idea".into(),
-            "backlog".into(),
-            "open".into(),
-            "in-progress".into(),
-            "blocked".into(),
-            "done".into(),
-        ];
-        assert_eq!(cmp_tasks(&a, &b, &keys, &ko), std::cmp::Ordering::Less);
-    }
-
-    #[test]
-    fn cmp_sorts_by_status_via_kanban_order() {
-        let a = make_task("idea", "feature", "low", "", "x");
-        let b = make_task("open", "feature", "low", "", "x");
-        let keys = ["status".into()];
-        let ko: Vec<String> = vec![
-            "idea".into(),
-            "backlog".into(),
-            "open".into(),
-            "in-progress".into(),
-            "blocked".into(),
-            "done".into(),
-        ];
-        assert_eq!(cmp_tasks(&a, &b, &keys, &ko), std::cmp::Ordering::Less);
-    }
-
-    #[test]
-    fn priority_ord_higher_ranks_first() {
-        assert!(priority_ord("high") < priority_ord("medium"));
-        assert!(priority_ord("medium") < priority_ord("low"));
-    }
-
-    #[test]
-    fn priority_ord_unknown_is_last() {
-        assert!(priority_ord("high") < priority_ord("nonsense"));
-        assert!(priority_ord("low") < priority_ord("nonsense"));
-    }
-
-    #[test]
     fn normalize_reorders_fields_canonically() {
         let input = "---\narea: backend\nstatus: open\ntype: bug\npriority: high\n---\n\nbody\n";
         let output = normalize_frontmatter(input).unwrap();
@@ -1253,86 +754,6 @@ mod tests {
         let input = "---\nstatus: open\ntype: bug\npriority: low\narea: backend\n---\n\nbody\n";
         let output = normalize_frontmatter(input).unwrap();
         assert_eq!(output, input);
-    }
-
-    fn make_task_file(dir: &std::path::Path, slug: &str, status: &str, typ: &str, priority: &str) {
-        let content = format!(
-            "---\nstatus: {status}\ntype: {typ}\npriority: {priority}\narea: \n---\n\n## Notes\n"
-        );
-        std::fs::write(dir.join(format!("{slug}.md")), content).unwrap();
-    }
-
-    #[test]
-    fn filter_excludes_done_by_default() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        make_task_file(dir, "alpha", "open", "bug", "high");
-        make_task_file(dir, "beta", "done", "feature", "low");
-        make_task_file(dir, "gamma", "in-progress", "chore", "medium");
-
-        let entries = read_task_files(dir).unwrap();
-        let exclude: Vec<String> = vec!["done".into()];
-        let tasks = load_and_filter_tasks(&entries, None, None, None, None, None, &exclude);
-        let slugs: Vec<&str> = tasks.iter().map(|t| t.slug.as_str()).collect();
-        assert!(slugs.contains(&"alpha"));
-        assert!(slugs.contains(&"gamma"));
-        assert!(!slugs.contains(&"beta"));
-    }
-
-    #[test]
-    fn filter_no_exclusions_returns_all() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        make_task_file(dir, "alpha", "open", "bug", "high");
-        make_task_file(dir, "beta", "done", "feature", "low");
-
-        let entries = read_task_files(dir).unwrap();
-        let tasks = load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
-        assert_eq!(tasks.len(), 2);
-    }
-
-    #[test]
-    fn filter_exclusions_combine_with_status_filter() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        make_task_file(dir, "alpha", "open", "bug", "high");
-        make_task_file(dir, "beta", "done", "feature", "low");
-        make_task_file(dir, "gamma", "open", "chore", "medium");
-
-        let entries = read_task_files(dir).unwrap();
-        let exclude: Vec<String> = vec!["done".into()];
-        let tasks = load_and_filter_tasks(&entries, Some("open"), None, None, None, None, &exclude);
-        let slugs: Vec<&str> = tasks.iter().map(|t| t.slug.as_str()).collect();
-        assert!(slugs.contains(&"alpha"));
-        assert!(slugs.contains(&"gamma"));
-        assert!(!slugs.contains(&"beta"));
-        assert_eq!(tasks.len(), 2);
-    }
-
-    #[test]
-    fn config_hide_done_defaults_to_true() {
-        let cfg = lib::Config::default();
-        assert!(cfg.hide_done);
-    }
-
-    #[test]
-    fn hidden_count_matches_difference_between_all_and_filtered() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        make_task_file(dir, "alpha", "open", "bug", "high");
-        make_task_file(dir, "beta", "done", "feature", "low");
-        make_task_file(dir, "gamma", "done", "chore", "medium");
-
-        let entries = read_task_files(dir).unwrap();
-        let all = load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
-        let exclude: Vec<String> = vec!["done".into()];
-        let filtered = load_and_filter_tasks(&entries, None, None, None, None, None, &exclude);
-
-        let all_done = all.iter().filter(|t| t.task.status == "done").count();
-        let filtered_done = filtered.iter().filter(|t| t.task.status == "done").count();
-        assert_eq!(all_done, 2);
-        assert_eq!(filtered_done, 0);
-        assert_eq!(all_done - filtered_done, 2); // hidden count
     }
 
     // --- slug validation (create_task is the only sink for user-supplied slugs) ---
@@ -1418,22 +839,6 @@ mod tests {
 
     // --- Result contracts (bool + eprintln -> Result) ---
 
-    const TEST_SCHEMA: &str = r#"{
-        "required": ["status", "type", "priority"],
-        "properties": {
-            "status": {"enum": ["open", "done"]},
-            "type": {"enum": ["bug", "feature"]},
-            "priority": {"enum": ["high", "low"]}
-        }
-    }"#;
-
-    fn plan_root_with_schema() -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(tmp.path().join(".plan")).unwrap();
-        std::fs::write(tmp.path().join(".plan/.schema.json"), TEST_SCHEMA).unwrap();
-        tmp
-    }
-
     #[test]
     fn create_task_ok_carries_created_path() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1465,54 +870,6 @@ mod tests {
         assert_eq!(format_file(&path, 120).expect("formats"), true);
         // Missing file is an error, not silent false.
         assert!(format_file(&dir.join("missing.md"), 120).is_err());
-    }
-
-    #[test]
-    fn validate_all_collects_errors_and_warnings() {
-        let tmp = plan_root_with_schema();
-        let root = tmp.path();
-        std::fs::write(
-            root.join(".plan/good.md"),
-            "---\nstatus: open\ntype: bug\npriority: high\n---\n\nok\n",
-        )
-        .unwrap();
-        std::fs::write(
-            root.join(".plan/bad.md"),
-            "---\nstatus: open\ntype: bug\n---\n\nmissing priority\n",
-        )
-        .unwrap();
-        std::fs::write(
-            root.join(".plan/warn.md"),
-            "---\nstatus: done\ntype: feature\npriority: low\ncustom: x\n---\n\nok\n",
-        )
-        .unwrap();
-
-        let mut warnings = Vec::new();
-        let errors = validate_all(root, &mut warnings).expect_err("bad.md must fail");
-        assert_eq!(warnings.len(), 1, "warn.md unknown key: {warnings:?}");
-        assert!(
-            warnings[0].contains("custom"),
-            "warning names the key: {}",
-            warnings[0]
-        );
-        assert!(
-            errors.iter().any(|e| e.contains("priority")),
-            "error names the missing field: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn validate_all_ok_carries_warnings() {
-        let tmp = plan_root_with_schema();
-        let root = tmp.path();
-        std::fs::write(
-            root.join(".plan/warn.md"),
-            "---\nstatus: done\ntype: feature\npriority: low\ncustom: x\n---\n\nok\n",
-        )
-        .unwrap();
-        let mut warnings = Vec::new();
-        validate_all(root, &mut warnings).expect("no errors");
-        assert_eq!(warnings.len(), 1);
     }
 
     #[test]
