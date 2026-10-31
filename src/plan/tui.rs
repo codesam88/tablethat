@@ -35,6 +35,20 @@ enum Mode {
     Preview,
 }
 
+/// Attention rank for browse columns: active work first, done last.
+/// Unknown statuses sort after known ones, preserving config order.
+fn attention_rank(status: &str) -> u8 {
+    match status {
+        "in-progress" => 0,
+        "open" => 1,
+        "backlog" => 2,
+        "idea" => 3,
+        "blocked" => 4,
+        "done" => 5,
+        _ => 6,
+    }
+}
+
 /// Truncate a slug to display width `n`, appending … when shortened.
 /// Floors to a char boundary, so multibyte slugs never panic slicing.
 fn truncate_slug(slug: &str, n: usize) -> String {
@@ -189,9 +203,12 @@ impl<'a> App<'a> {
     }
 
     fn rebuild_columns(&mut self) {
-        let kanban_order = &self.cfg.kanban_order;
+        // Browse leads with active work (user attention is at the top),
+        // unlike list output which follows config order to the bottom.
+        let mut order = self.cfg.kanban_order.clone();
+        order.sort_by_key(|s| attention_rank(s));
         let mut columns = Vec::new();
-        for status in kanban_order {
+        for status in &order {
             let indices: Vec<usize> = self
                 .tasks
                 .iter()
@@ -983,5 +1000,40 @@ mod tests {
             let out = truncate_slug(slug, n);
             assert!(out.len() <= n + "…".len());
         }
+    }
+}
+
+#[cfg(test)]
+mod attention_tests {
+    use super::*;
+
+    fn ordered_statuses(order: &[String]) -> Vec<String> {
+        let mut v = order.to_vec();
+        v.sort_by_key(|s| attention_rank(s));
+        v
+    }
+
+    #[test]
+    fn default_order_becomes_attention_order() {
+        let default = vec![
+            "idea".to_string(),
+            "backlog".to_string(),
+            "open".to_string(),
+            "in-progress".to_string(),
+            "blocked".to_string(),
+            "done".to_string(),
+        ];
+        let got = ordered_statuses(&default);
+        assert_eq!(
+            got,
+            vec!["in-progress", "open", "backlog", "idea", "blocked", "done"]
+        );
+    }
+
+    #[test]
+    fn unknown_statuses_sort_last_stably() {
+        let order = vec!["zzz".to_string(), "open".to_string(), "aaa".to_string()];
+        let got = ordered_statuses(&order);
+        assert_eq!(got, vec!["open", "zzz", "aaa"]);
     }
 }
