@@ -1,6 +1,6 @@
 use super::model::parse_frontmatter;
 use super::store;
-use crate::markdown;
+use crate::markdown_fmt;
 
 /// Re-emit a task file with canonical frontmatter field ordering and clean formatting.
 /// Preserves the body text and any unknown fields exactly. Returns the full markdown.
@@ -68,7 +68,7 @@ fn value_to_yaml_str(val: &serde_json::Value) -> String {
 }
 
 fn format_markdown_body(body: &str, width: usize) -> String {
-    markdown::format_commonmark(body, width)
+    markdown_fmt::format_commonmark(body, width)
 }
 
 /// Format one file in place. Returns whether the file changed;

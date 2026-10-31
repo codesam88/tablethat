@@ -18,7 +18,8 @@
 
 use ratatui::text::Line;
 use tablethat_lib::ThemeConfig;
-use tablethat_lib::markdown::{format_commonmark, render_markdown, theme_from_cfg};
+use tablethat_lib::markdown::{render_markdown, theme_from_cfg};
+use tablethat_lib::markdown_fmt::format_commonmark;
 
 const WIDTH: usize = 80;
 

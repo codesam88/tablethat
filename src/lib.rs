@@ -3,6 +3,7 @@ pub mod config;
 pub mod gloss;
 pub mod launch;
 pub mod markdown;
+pub mod markdown_fmt;
 pub mod plan;
 pub mod theme;
 
