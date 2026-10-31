@@ -4,8 +4,8 @@ use tablethat_lib as lib;
 
 #[path = "../../gloss/filter.rs"]
 mod filter;
-#[path = "../../gloss/tui_preview.rs"]
-mod tui_preview;
+#[path = "../../gloss/tui.rs"]
+mod tui;
 
 #[derive(Parser)]
 #[command(
@@ -68,10 +68,10 @@ fn main() {
     match cli.path {
         // TUI mode: file or directory argument provided, or no arg but tty
         Some(path) if path.is_file() => {
-            tui_preview::run_file_viewer(&path, &cfg, &themes, 0, width);
+            tui::run_file_viewer(&path, &cfg, &themes, 0, width);
         }
         Some(path) if path.is_dir() => {
-            tui_preview::run_directory_browser(&path, &cfg, &themes, width);
+            tui::run_directory_browser(&path, &cfg, &themes, width);
         }
         Some(path) => {
             eprintln!("gloss: {}: not a file or directory", path.display());
@@ -87,7 +87,7 @@ fn main() {
         // No arg + tty: browse .md files in cwd
         None => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            tui_preview::run_directory_browser(&cwd, &cfg, &themes, width);
+            tui::run_directory_browser(&cwd, &cfg, &themes, width);
         }
     }
 }

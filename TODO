@@ -1,0 +1,8 @@
+
+- extract gloss into separate project, installed separately
+
+- find better name for 'plan' and 'tablethat'...
+
+  .issues/ ?  - add an issue, work on issue
+  .tasks/  ?  - add a task, work on task..
+  .plan/ ?  - keep the 'plan' tool and its natural dot-folder?

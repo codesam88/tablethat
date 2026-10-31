@@ -4,8 +4,8 @@ use tablethat_lib as lib;
 
 #[path = "../../plan/tasks.rs"]
 mod tasks;
-#[path = "../../plan/tui_kanban.rs"]
-mod tui_kanban;
+#[path = "../../plan/tui.rs"]
+mod tui;
 
 #[derive(Parser)]
 #[command(
@@ -283,7 +283,7 @@ fn main() {
             area,
             search,
         }) => {
-            tui_kanban::run_tui(
+            tui::run_tui(
                 &root,
                 &cfg,
                 status.as_deref(),
