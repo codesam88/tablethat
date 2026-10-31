@@ -26,9 +26,15 @@ struct Cli {
     #[arg(long, value_name = "NAME")]
     theme: Option<String>,
 
-    /// Wrap width for markdown rendering (default: 80)
+    /// Wrap width for markdown rendering (default: terminal width, else 80).
+    /// The TUI reserves 2 columns for scrollbar + gap; effective width is
+    /// the smaller of this and the usable terminal width.
     #[arg(short, long, value_name = "COLS")]
     width: Option<usize>,
+
+    /// Hide the scrollbar in TUI mode.
+    #[arg(long)]
+    no_scrollbar: bool,
 }
 
 fn run(cli: Cli) -> Result<(), String> {
@@ -52,15 +58,18 @@ fn run(cli: Cli) -> Result<(), String> {
 
     let is_tty = is_tty();
     let no_color = cli.no_color;
+    let scrollbar = !cli.no_scrollbar;
 
     match cli.path {
         // TUI mode: file or directory argument provided, or no arg but tty
         Some(path) if path.is_file() => {
-            tablethat_lib::gloss::tui::run_file_viewer(&path, &cfg, &themes, 0, width);
+            tablethat_lib::gloss::tui::run_file_viewer(&path, &cfg, &themes, 0, width, scrollbar);
             Ok(())
         }
         Some(path) if path.is_dir() => {
-            tablethat_lib::gloss::tui::run_directory_browser(&path, &cfg, &themes, width);
+            tablethat_lib::gloss::tui::run_directory_browser(
+                &path, &cfg, &themes, width, scrollbar,
+            );
             Ok(())
         }
         Some(path) => Err(format!("{}: not a file or directory", path.display())),
@@ -72,7 +81,7 @@ fn run(cli: Cli) -> Result<(), String> {
         // No arg + tty: browse .md files in cwd
         None => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            tablethat_lib::gloss::tui::run_directory_browser(&cwd, &cfg, &themes, width);
+            tablethat_lib::gloss::tui::run_directory_browser(&cwd, &cfg, &themes, width, scrollbar);
             Ok(())
         }
     }

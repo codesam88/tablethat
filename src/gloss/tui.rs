@@ -12,6 +12,32 @@ use ratatui::{
 };
 use std::path::{Path, PathBuf};
 
+/// Visible-window thumb as a row range within a `track_h`-tall scrollbar.
+/// Exact at both ends (0 at top, `track_h` at bottom); proportional in
+/// between. `scroll` is clamped defensively; a fitting viewport fills all.
+fn thumb_range(
+    content_len: usize,
+    viewport: usize,
+    scroll: usize,
+    track_h: usize,
+) -> (usize, usize) {
+    if track_h == 0 {
+        return (0, 0);
+    }
+    let max_scroll = content_len.saturating_sub(viewport);
+    if max_scroll == 0 {
+        return (0, track_h);
+    }
+    let scroll = scroll.min(max_scroll);
+    let thumb = (viewport
+        .saturating_mul(track_h)
+        .saturating_div(content_len.max(1)))
+    .max(1)
+    .min(track_h);
+    let start = scroll * (track_h - thumb) / max_scroll;
+    (start, (start + thumb).min(track_h))
+}
+
 struct App {
     files: Vec<PathBuf>,
     selected: usize,
@@ -19,7 +45,12 @@ struct App {
     raw_lines: Vec<String>,
     scroll: usize,
     offset: usize,
+    /// Wrap target for rendering (user `--width` or terminal default).
     width: usize,
+    /// Original wrap target; re-applied on resize (a `--width` survives).
+    width_setting: usize,
+    /// Whether to reserve a 1-char scrollbar + 1-char gap at the right.
+    scrollbar: bool,
     themes: Vec<lib::theme::ThemeFile>,
     current_theme: usize,
     quit: bool,
@@ -33,7 +64,15 @@ struct App {
 }
 
 impl App {
-    fn new(files: Vec<PathBuf>, themes: Vec<lib::theme::ThemeFile>, width: usize) -> Self {
+    fn new(
+        files: Vec<PathBuf>,
+        themes: Vec<lib::theme::ThemeFile>,
+        width: usize,
+        scrollbar: bool,
+    ) -> Self {
+        let term_cols = terminal::size()
+            .map(|(cols, _)| cols as usize)
+            .unwrap_or(width);
         let mut app = Self {
             files,
             selected: 0,
@@ -41,7 +80,9 @@ impl App {
             raw_lines: Vec::new(),
             scroll: 0,
             offset: 0,
-            width,
+            width: Self::effective_width(width, term_cols, scrollbar),
+            width_setting: width,
+            scrollbar,
             themes,
             current_theme: 0,
             quit: false,
@@ -61,6 +102,14 @@ impl App {
         };
         app.load_selected();
         app
+    }
+
+    /// Wrap width for rendering: the configured target, capped at the
+    /// terminal width minus the scrollbar reservation (1-char bar + 1-char
+    /// gap) when enabled. Never exceeds what fits on screen.
+    fn effective_width(setting: usize, term_cols: usize, scrollbar: bool) -> usize {
+        let reserved = if scrollbar { 2 } else { 0 };
+        setting.min(term_cols.saturating_sub(reserved))
     }
 
     fn load_selected(&mut self) {
@@ -211,7 +260,8 @@ impl App {
 
     fn resize_to_terminal(&mut self) {
         if let Ok((cols, rows)) = terminal::size() {
-            let new_width = cols as usize;
+            let new_width =
+                Self::effective_width(self.width_setting, cols as usize, self.scrollbar);
             if new_width != self.width {
                 self.width = new_width;
                 // Save scroll position before reload (load_selected resets it)
@@ -240,9 +290,10 @@ pub fn run_file_viewer(
     themes: &[lib::theme::ThemeFile],
     initial_theme: usize,
     width: usize,
+    scrollbar: bool,
 ) {
     let files = vec![path.to_path_buf()];
-    let mut app = App::new(files, themes.to_vec(), width);
+    let mut app = App::new(files, themes.to_vec(), width, scrollbar);
     app.current_theme = initial_theme;
     app.load_selected();
     run_tui(&mut app, cfg);
@@ -254,6 +305,7 @@ pub fn run_directory_browser(
     cfg: &lib::Config,
     themes: &[lib::theme::ThemeFile],
     width: usize,
+    scrollbar: bool,
 ) {
     let files = match lib::plan::store::sorted_md_entries(dir) {
         Ok(files) => files,
@@ -268,7 +320,7 @@ pub fn run_directory_browser(
         return;
     }
 
-    let mut app = App::new(files, themes.to_vec(), width);
+    let mut app = App::new(files, themes.to_vec(), width, scrollbar);
     run_tui(&mut app, cfg);
 }
 
@@ -362,15 +414,47 @@ fn render(frame: &mut Frame, app: &mut App) {
     // Note: We do NOT call .wrap() here because render_markdown already
     // handles word wrapping with our bracket-aware logic. Ratatui's default
     // wrapping would re-wrap and break our bracket grouping rules.
+    let show_bar = app.scrollbar && body_area.width >= 4;
+    let text_w = if show_bar {
+        body_area.width.saturating_sub(3)
+    } else {
+        body_area.width.saturating_sub(1)
+    };
     frame.render_widget(
         Paragraph::new(app.content.clone()).scroll((app.scroll as u16, app.offset as u16)),
-        Rect::new(
-            body_area.x + 1,
-            body_area.y,
-            body_area.width.saturating_sub(1),
-            body_area.height,
-        ),
+        Rect::new(body_area.x + 1, body_area.y, text_w, body_area.height),
     );
+
+    if show_bar {
+        let (thumb_start, thumb_end) = thumb_range(
+            app.content.len(),
+            app.viewport_height,
+            app.scroll,
+            body_area.height as usize,
+        );
+        let track = Style::default().fg(Color::DarkGray);
+        let thumb = Style::default().fg(Color::Gray);
+        let bar: Vec<Line> = (0..body_area.height)
+            .map(|row| {
+                let (glyph, style) = if (row as usize) >= thumb_start && (row as usize) < thumb_end
+                {
+                    ("█", thumb)
+                } else {
+                    ("│", track)
+                };
+                Line::from(Span::styled(glyph, style))
+            })
+            .collect();
+        frame.render_widget(
+            Paragraph::new(bar),
+            Rect::new(
+                body_area.x + body_area.width.saturating_sub(1),
+                body_area.y,
+                1,
+                body_area.height,
+            ),
+        );
+    }
 
     if let Some(search_area) = search_area {
         let search_line = if app.search_mode {
@@ -532,7 +616,7 @@ mod paging_tests {
     use super::*;
 
     fn app_with_scroll(scroll: usize, viewport_height: usize) -> App {
-        let mut app = App::new(Vec::new(), Vec::new(), 80);
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true);
         app.scroll = scroll;
         app.viewport_height = viewport_height;
         app
@@ -563,5 +647,54 @@ mod paging_tests {
     fn page_step_is_at_least_one() {
         let app = app_with_scroll(0, 0);
         assert_eq!(app.page_step(), 1);
+    }
+}
+
+#[cfg(test)]
+mod scrollbar_tests {
+    use super::*;
+
+    #[test]
+    fn effective_width_caps_at_usable_terminal_width() {
+        // Explicit setting is honored when it fits …
+        assert_eq!(App::effective_width(80, 100, true), 80);
+        assert_eq!(App::effective_width(80, 100, false), 80);
+        // … but never exceeds the terminal minus bar + gap, so a default
+        // (terminal-width) setting always leaves 1 char before the bar.
+        assert_eq!(App::effective_width(100, 100, true), 98);
+        assert_eq!(App::effective_width(100, 100, false), 100);
+    }
+
+    #[test]
+    fn effective_width_honors_smaller_setting() {
+        assert_eq!(App::effective_width(40, 100, true), 40);
+    }
+
+    #[test]
+    fn effective_width_saturates_on_narrow_terminal() {
+        assert_eq!(App::effective_width(80, 10, true), 8);
+        assert_eq!(App::effective_width(80, 1, true), 0);
+    }
+
+    #[test]
+    fn thumb_is_exact_at_top() {
+        assert_eq!(thumb_range(100, 20, 0, 10).0, 0);
+    }
+
+    #[test]
+    fn thumb_is_exact_at_bottom() {
+        assert_eq!(thumb_range(100, 20, 80, 10), (8, 10));
+    }
+
+    #[test]
+    fn thumb_fills_track_when_content_fits() {
+        assert_eq!(thumb_range(10, 20, 0, 10), (0, 10));
+    }
+
+    #[test]
+    fn thumb_has_minimum_size_and_clamps_scroll() {
+        assert_eq!(thumb_range(1000, 5, 500, 10), (4, 5));
+        assert_eq!(thumb_range(100, 20, 999, 10), (8, 10));
+        assert_eq!(thumb_range(100, 20, 0, 0), (0, 0));
     }
 }
