@@ -33,7 +33,7 @@ clap = { version = "4", features = ["derive"] }
 comrak = { version = "0.53", default-features = false }
 figment = { version = "0.10", features = ["toml", "env"] }
 directories = "6"
-toml = "0.8"
+toml = "1.1"
 shell-words = "1.1.1"
 
 [dev-dependencies]
