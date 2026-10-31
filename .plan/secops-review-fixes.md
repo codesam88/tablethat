@@ -18,7 +18,7 @@ then ride-alongs.
   YAML-quote strings in `value_to_yaml_str` (TDD).
 - [x] Step 2: gloss highlight Unicode panic — char-aware offsets (TDD).
 - [x] Step 3: release gates — test/clippy/audit before publish.
-- [ ] Step 4: pin action SHAs.
+- [x] Step 4: pin action SHAs.
 - [ ] Step 5: `list_tasks` returns `Result` (drop lib `exit`).
 - [ ] Step 6: slug truncation char boundary (+ helper test).
 - [ ] Step 7: MSRV job runs check + smoke, not just test.
@@ -33,6 +33,9 @@ then ride-alongs.
 
 ## Progress (newest first)
 
+- 2026-10-31: Step 4 DONE (config-only). All 18 action refs pinned to SHAs
+  (resolved via GitHub API today) with `# vX` comments so Dependabot keeps
+  updating them. YAML validated.
 - 2026-10-31: Step 3 DONE (config-only). `verify` job (check + test +
   audit, same pinned actions as CI) gates `build`; chain verified via
   YAML parse. Tags can no longer ship red.
