@@ -283,12 +283,12 @@ fn run_tui(app: &mut App, cfg: &lib::Config) {
         match handle_events(app, cfg) {
             Ok(Action::OpenEditor) => {
                 if let Some(path) = app.current_file().map(|p| p.to_path_buf()) {
-                    let editor = std::env::var("EDITOR")
-                        .ok()
-                        .filter(|e| !e.is_empty())
-                        .unwrap_or_else(|| "vi".to_string());
+                    let (editor, editor_args) = lib::launch::editor_command();
                     ratatui::restore();
-                    let _ = std::process::Command::new(&editor).arg(&path).status();
+                    let _ = std::process::Command::new(&editor)
+                        .args(&editor_args)
+                        .arg(&path)
+                        .status();
                     app.load_selected();
                     terminal = match ratatui::try_init() {
                         Ok(t) => t,

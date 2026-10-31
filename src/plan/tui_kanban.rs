@@ -256,7 +256,8 @@ pub fn run_tui(
                     if let Some((_slug, path)) = app.current_task_path() {
                         ratatui::restore();
                         let width = app.cfg.pager_width.to_string();
-                        let status = std::process::Command::new("gloss")
+                        let gloss = lib::launch::resolve_gloss_program();
+                        let status = std::process::Command::new(&gloss)
                             .arg("--width")
                             .arg(&width)
                             .arg(path)
@@ -276,12 +277,12 @@ pub fn run_tui(
                 }
                 Action::OpenEditor => {
                     if let Some((_slug, path)) = app.current_task_path() {
-                        let editor = std::env::var("EDITOR")
-                            .ok()
-                            .filter(|e| !e.is_empty())
-                            .unwrap_or_else(|| "vi".to_string());
+                        let (editor, editor_args) = lib::launch::editor_command();
                         ratatui::restore();
-                        let status = std::process::Command::new(&editor).arg(path).status();
+                        let status = std::process::Command::new(&editor)
+                            .args(&editor_args)
+                            .arg(path)
+                            .status();
                         if let Ok(s) = status
                             && !s.success()
                         {

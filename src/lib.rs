@@ -1,3 +1,4 @@
+pub mod launch;
 pub mod markdown;
 pub mod theme;
 

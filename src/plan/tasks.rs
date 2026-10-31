@@ -897,7 +897,8 @@ pub fn create_task(
 }
 
 pub fn open_task(path: &std::path::Path, width: usize) -> bool {
-    match std::process::Command::new("gloss")
+    let gloss = lib::launch::resolve_gloss_program();
+    match std::process::Command::new(&gloss)
         .arg("--width")
         .arg(width.to_string())
         .arg(path)
