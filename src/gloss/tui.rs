@@ -63,6 +63,84 @@ fn thumb_range(
     (start, (start + thumb).min(track_h))
 }
 
+/// Highlight every occurrence and count hits in ONE pass, so
+/// `search_index` always addresses a visible highlight. Returns the
+/// lines plus one hit entry (line index) per highlighted occurrence.
+/// Matches spanning styled-segment boundaries are highlighted by
+/// cutting spans (surrounding styles kept). Empty query passes through.
+fn highlight_search(
+    lines: &[Line<'static>],
+    query_lower: &str,
+    search_index: usize,
+    hl_current: Style,
+    hl: Style,
+) -> (Vec<Line<'static>>, Vec<usize>) {
+    if query_lower.is_empty() {
+        return (lines.to_vec(), Vec::new());
+    }
+    let mut out_lines = Vec::with_capacity(lines.len());
+    let mut hits = Vec::new();
+    let mut occurrence = 0usize;
+    for (line_idx, line) in lines.iter().enumerate() {
+        let mut pieces: Vec<(&str, Style, usize)> = Vec::new();
+        let mut off = 0usize;
+        for span in &line.spans {
+            let text: &str = &span.content;
+            pieces.push((text, span.style, off));
+            off += text.len();
+        }
+        let joined: String = pieces.iter().map(|(t, _, _)| *t).collect();
+        let ranges = crate::text::ci_match_ranges(&joined, query_lower);
+        if ranges.is_empty() {
+            out_lines.push(line.clone());
+            continue;
+        }
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut pos = 0usize;
+        for (s, e) in &ranges {
+            push_slice(&pieces, &joined, pos, *s, None, &mut spans);
+            let style = if occurrence == search_index {
+                hl_current
+            } else {
+                hl
+            };
+            push_slice(&pieces, &joined, *s, *e, Some(style), &mut spans);
+            hits.push(line_idx);
+            occurrence += 1;
+            pos = *e;
+        }
+        push_slice(&pieces, &joined, pos, joined.len(), None, &mut spans);
+        out_lines.push(Line::from(spans));
+    }
+    (out_lines, hits)
+}
+
+/// Push `joined[from..to)` reusing original span styles (`force` overrides).
+/// All bounds derive from span edges or match ranges: always slice-safe.
+fn push_slice(
+    pieces: &[(&str, Style, usize)],
+    joined: &str,
+    from: usize,
+    to: usize,
+    force: Option<Style>,
+    out: &mut Vec<Span<'static>>,
+) {
+    if from >= to {
+        return;
+    }
+    for (text, style, start) in pieces {
+        let end = start + text.len();
+        let s = (*start).max(from);
+        let e = end.min(to);
+        if s < e {
+            out.push(Span::styled(
+                joined[s..e].to_string(),
+                force.unwrap_or(*style),
+            ));
+        }
+    }
+}
+
 struct App {
     files: Vec<PathBuf>,
     selected: usize,
@@ -160,42 +238,6 @@ impl App {
         }
     }
 
-    fn highlight_matches(&self, lines: &[Line<'static>]) -> Vec<Line<'static>> {
-        if self.search_query.is_empty() {
-            return lines.to_vec();
-        }
-        let q = self.search_query.to_lowercase();
-        let mut global_match = 0usize;
-        lines
-            .iter()
-            .map(|line| {
-                let mut new_spans: Vec<Span<'static>> = Vec::new();
-                for span in &line.spans {
-                    let text: &str = &span.content;
-                    let style = span.style;
-                    let mut last = 0;
-                    for (idx, end) in crate::text::ci_match_ranges(text, &q) {
-                        if idx > last {
-                            new_spans.push(Span::styled(text[last..idx].to_string(), style));
-                        }
-                        let hl = if global_match == self.search_index {
-                            self.highlight_current_style
-                        } else {
-                            self.highlight_style
-                        };
-                        new_spans.push(Span::styled(text[idx..end].to_string(), hl));
-                        global_match += 1;
-                        last = end;
-                    }
-                    if last < text.len() {
-                        new_spans.push(Span::styled(text[last..].to_string(), style));
-                    }
-                }
-                Line::from(new_spans)
-            })
-            .collect()
-    }
-
     fn apply_search_highlight(&mut self) {
         let theme_cfg = self
             .themes
@@ -210,27 +252,28 @@ impl App {
             && let Ok(text) = std::fs::read_to_string(path)
         {
             let base = lib::markdown::render_markdown(&th, &text, self.width);
-            self.content = self.highlight_matches(&base);
+            let q = self.search_query.to_lowercase();
+            let (content, hits) = highlight_search(
+                &base,
+                &q,
+                self.search_index,
+                self.highlight_current_style,
+                self.highlight_style,
+            );
+            self.content = content;
+            self.search_hits = hits;
         }
     }
 
     fn run_search(&mut self) {
-        self.search_hits.clear();
         self.search_index = 0;
-        let q = self.search_query.to_lowercase();
-        if q.is_empty() {
+        if self.search_query.to_lowercase().is_empty() {
+            self.search_hits.clear();
             return;
         }
-        for (i, line) in self.content.iter().enumerate() {
-            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            let lower = text.to_lowercase();
-            for _ in lower.match_indices(&q) {
-                self.search_hits.push(i);
-            }
-        }
+        self.apply_search_highlight();
         if !self.search_hits.is_empty() {
             self.scroll_to_match(0);
-            self.apply_search_highlight();
         }
     }
 
@@ -766,5 +809,77 @@ mod scrollbar_search_tests {
         let app = app_with_search(100, vec![], 0);
         let track = Style::default().fg(Color::DarkGray);
         assert_eq!(scrollbar_row_style(&app, 5, 10), track);
+    }
+}
+
+#[cfg(test)]
+mod highlight_sync_tests {
+    use super::*;
+
+    fn plain(text: &str) -> Span<'static> {
+        Span::styled(text.to_string(), Style::default())
+    }
+
+    fn hl() -> Style {
+        Style::default().fg(Color::Black).bg(Color::Gray)
+    }
+
+    fn hl_cur() -> Style {
+        Style::default().fg(Color::Black).bg(Color::Yellow)
+    }
+
+    #[test]
+    fn cross_span_match_is_highlighted_and_counted() {
+        let lines = vec![Line::from(vec![plain("hel"), plain("lo world")])];
+        let (out, hits) = highlight_search(&lines, "hello", 0, hl_cur(), hl());
+        assert_eq!(hits, vec![0]);
+        let text: String = out[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "hello world");
+        // Adjacent pieces share the highlight style (per-piece styles kept).
+        let hl_text: String = out[0]
+            .spans
+            .iter()
+            .filter(|s| s.style == hl_cur())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(hl_text, "hello");
+    }
+
+    #[test]
+    fn every_index_addresses_exactly_one_visible_highlight() {
+        let lines = vec![
+            Line::from(vec![plain("hel"), plain("lo")]),
+            Line::from(vec![plain("say hello")]),
+            Line::from(vec![plain("nothing here")]),
+        ];
+        for index in 0..2 {
+            let (out, hits) = highlight_search(&lines, "hello", index, hl_cur(), hl());
+            assert_eq!(hits, vec![0, 1]);
+            // Occurrences may span pieces; joined current-styled text is one match.
+            let cur_text: String = out
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .filter(|s| s.style == hl_cur())
+                .map(|s| s.content.as_ref())
+                .collect();
+            assert_eq!(cur_text, "hello", "index {index} must show one current");
+        }
+    }
+
+    #[test]
+    fn single_span_lines_keep_three_part_split() {
+        let lines = vec![Line::from(vec![plain("say hello now")])];
+        let (out, hits) = highlight_search(&lines, "hello", 0, hl_cur(), hl());
+        assert_eq!(hits, vec![0]);
+        let parts: Vec<&str> = out[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(parts, vec!["say ", "hello", " now"]);
+    }
+
+    #[test]
+    fn empty_query_passes_through_unchanged() {
+        let lines = vec![Line::from(vec![plain("hello")])];
+        let (out, hits) = highlight_search(&lines, "", 0, hl_cur(), hl());
+        assert!(hits.is_empty());
+        assert_eq!(out[0].spans.len(), 1);
     }
 }
