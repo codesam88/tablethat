@@ -843,6 +843,19 @@ pub fn init_plan(root: &std::path::Path) {
     eprintln!("initialized .plan/ in {}", root.display());
 }
 
+/// Returns true when `slug` is a safe task slug: nonempty, only lowercase
+/// ASCII alphanumerics and hyphens, with no leading or trailing hyphen
+/// (i.e. `^[a-z0-9]+(?:-[a-z0-9]+)*$`). Slugs become file names, so any
+/// other character (uppercase, `_`, `.`, space, `/`, ...) is rejected.
+fn is_valid_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+        && slug
+            .chars()
+            .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
+}
+
 pub fn create_task(
     root: &std::path::Path,
     slug: &str,
@@ -851,8 +864,19 @@ pub fn create_task(
     priority: &str,
     area: &str,
 ) -> bool {
+    if !is_valid_slug(slug) {
+        eprintln!("invalid slug: '{slug}' (must match ^[a-z0-9]+(?:-[a-z0-9]+)*$)");
+        return false;
+    }
+
     let tasks_dir = root.join(lib::PLAN_DIR);
     let path = tasks_dir.join(format!("{slug}.md"));
+
+    // Defense in depth: the resolved path must stay inside the tasks dir.
+    if path.strip_prefix(&tasks_dir).is_err() {
+        eprintln!("invalid slug: '{slug}' escapes the task directory");
+        return false;
+    }
 
     if path.exists() {
         eprintln!("task already exists: {}", path.display());
@@ -1330,5 +1354,93 @@ mod tests {
         assert_eq!(all_done, 2);
         assert_eq!(filtered_done, 0);
         assert_eq!(all_done - filtered_done, 2); // hidden count
+    }
+
+    // --- slug validation (create_task is the only sink for user-supplied slugs) ---
+
+    #[test]
+    fn create_task_rejects_traversal_and_separator_slugs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join(".plan")).unwrap();
+        for slug in ["../foo", "..", "a/../b", "/abs", "foo/bar"] {
+            assert!(
+                !create_task(root, slug, "open", "bug", "high", ""),
+                "slug '{slug}' must be rejected"
+            );
+        }
+        // Nothing may be created outside .plan/ (e.g. `../foo` → root/foo.md).
+        assert!(
+            !root.join("foo.md").exists(),
+            "traversal slug created a file outside .plan/"
+        );
+        assert_eq!(
+            std::fs::read_dir(root.join(".plan")).unwrap().count(),
+            0,
+            "no file may be created for a rejected slug"
+        );
+    }
+
+    #[test]
+    fn create_task_rejects_embedded_traversal_slug_even_when_resolvable_on_fs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // If `a/../b` ever reached the fs, it would resolve to `.plan/b.md`.
+        std::fs::create_dir_all(root.join(".plan/a")).unwrap();
+        assert!(!create_task(root, "a/../b", "open", "bug", "high", ""));
+        assert!(!root.join(".plan/b.md").exists());
+        assert!(!root.join(".plan/a/b.md").exists());
+    }
+
+    #[test]
+    fn create_task_rejects_charset_violation_slugs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join(".plan")).unwrap();
+        for slug in ["Foo_Bar", "a b", "", "a.b"] {
+            assert!(
+                !create_task(root, slug, "open", "bug", "high", ""),
+                "slug '{slug}' must be rejected"
+            );
+        }
+        assert_eq!(
+            std::fs::read_dir(root.join(".plan")).unwrap().count(),
+            0,
+            "no file may be created for a rejected slug"
+        );
+    }
+
+    #[test]
+    fn create_task_rejects_leading_or_trailing_hyphen_slugs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join(".plan")).unwrap();
+        for slug in ["-foo", "foo-"] {
+            assert!(
+                !create_task(root, slug, "open", "bug", "high", ""),
+                "slug '{slug}' must be rejected"
+            );
+        }
+        assert_eq!(std::fs::read_dir(root.join(".plan")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn create_task_accepts_valid_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join(".plan")).unwrap();
+        assert!(create_task(
+            root,
+            "my-task-123",
+            "open",
+            "bug",
+            "high",
+            "backend"
+        ));
+        let path = root.join(".plan/my-task-123.md");
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("status: open"));
+        assert!(content.contains("type: bug"));
     }
 }
