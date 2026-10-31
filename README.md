@@ -33,6 +33,11 @@ default directories (typically `~/.cargo/bin/` and `~/.config/{plan,gloss}/`).
     cargo plan kanban        # browse local project's tasks
     cargo gloss README.md    # view README.md
 
+### Development
+
+    just setup-dev           # installs audit tools + enables the pre-commit hook
+    just precommit           # fmt + clippy + tests (also runs on every commit)
+
 ## The Tools
 
 ### plan

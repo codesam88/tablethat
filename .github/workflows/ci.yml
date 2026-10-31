@@ -44,3 +44,17 @@ jobs:
 
       - name: Test
         run: just test
+
+      - name: Smoke test
+        run: just smoke
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install MSRV toolchain
+        run: rustup toolchain install 1.89 --profile minimal
+
+      - name: Test on MSRV
+        run: cargo +1.89 test

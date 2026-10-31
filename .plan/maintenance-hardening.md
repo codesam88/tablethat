@@ -37,19 +37,19 @@ Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawba
 
 ## Security (labels: [class|severity|effort])
 
-- [ ] [supply-chain|critical|effort:S] Migrate off `serde_yaml@0.9` (RUSTSEC-2024-0449 `unsafe-libyaml@0.2.11` unmaintained) to `serde-saphyr` or `serde_yaml_ng`. `cargo tree -i unsafe-libyaml`. Keeps `deny.toml ignore=[]` green.
-- [ ] [supply-chain|medium|effort:XS] Track `RUSTSEC-2026-0253` `lru@0.18` unsound via `ratatui-core`. Bump `ratatui` when upstream fixes.
-- [ ] [input-validation|high|effort:S] Validate slug in `create_task` (`src/plan/tasks.rs:834`): reject `/`, `\`, `..`, enforce `^[a-z0-9-]+$`. Prevents `plan add ../foo` escaping `.plan/`.
-- [ ] [exec|medium|effort:S] Harden launches: `Command::new("gloss")` PATH hijack (`tasks.rs:864`, `tui_kanban.rs:259`); `Command::new(&editor)` breaks on `EDITOR="code --wait"`. Consider `current_exe` dir lookup + splitting editor args.
-- [ ] [config|medium|effort:S] Stop silent fallbacks: `Config::load unwrap_or_default()` (`lib.rs:172`), theme bad-TOML skip (`theme.rs:43-45`). Surface errors.
-- [ ] [ci-supply-chain|medium|effort:S] Set `permissions: contents: read` in `ci.yml` / `audit.yml` (only `release.yml` has it). Add Dependabot for cargo + actions. Add SBOM/provenance/checksums to release.
+- [x] [supply-chain|critical|effort:S] Migrate off `serde_yaml@0.9` (RUSTSEC-2024-0449 `unsafe-libyaml@0.2.11` unmaintained) to `serde-saphyr` or `serde_yaml_ng`. `cargo tree -i unsafe-libyaml`. Keeps `deny.toml ignore=[]` green.
+- [x] [supply-chain|medium|effort:XS] Track `RUSTSEC-2026-0253` `lru@0.18` unsound via `ratatui-core`. Bump `ratatui` when upstream fixes.
+- [x] [input-validation|high|effort:S] Validate slug in `create_task` (`src/plan/tasks.rs:834`): reject `/`, `\`, `..`, enforce `^[a-z0-9-]+$`. Prevents `plan add ../foo` escaping `.plan/`.
+- [x] [exec|medium|effort:S] Harden launches: `Command::new("gloss")` PATH hijack (`tasks.rs:864`, `tui_kanban.rs:259`); `Command::new(&editor)` breaks on `EDITOR="code --wait"`. Consider `current_exe` dir lookup + splitting editor args.
+- [x] [config|medium|effort:S] Stop silent fallbacks: `Config::load unwrap_or_default()` (`lib.rs:172`), theme bad-TOML skip (`theme.rs:43-45`). Surface errors.
+- [x] [ci-supply-chain|medium|effort:S] Set `permissions: contents: read` in `ci.yml` / `audit.yml` (only `release.yml` has it). Add Dependabot for cargo + actions. Add SBOM/provenance/checksums to release.
 
 ## DevOps
 
-- [ ] Enable hook: `git config core.hooksPath .githooks` / `just setup-dev`. Verify in CI docs.
-- [ ] Fix `ci.yml paths-ignore: .plan/**` ignoring `.plan/.schema.json` schema changes.
-- [ ] Pin MSRV: `rust-version=1.85` has no CI check. Add `cargo msrv --check` or pin `stable` in `rust-toolchain.toml`.
-- [ ] Add CI smoke test: `cargo build && plan --help && echo '# hi' | gloss --width 80`.
+- [x] Enable hook: `git config core.hooksPath .githooks` / `just setup-dev`. Verify in CI docs.
+- [x] Fix `ci.yml paths-ignore: .plan/**` ignoring `.plan/.schema.json` schema changes.
+- [x] Pin MSRV: `rust-version=1.85` has no CI check. Add `cargo msrv --check` or pin `stable` in `rust-toolchain.toml`.
+- [x] Add CI smoke test: `cargo build && plan --help && echo '# hi' | gloss --width 80`.
 
 ## Quality
 
@@ -63,6 +63,7 @@ Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawba
 
 ## Progress (newest first)
 
+- 2026-10-31: DevOps batch DONE by parent (config-only). Hook enabled locally (`core.hooksPath=.githooks`) + README Development section; `just smoke` recipe + CI smoke step (verified exit 0); `msrv` CI job (`cargo +1.89 test`, proven locally — 82 pass on 1.89 toolchain, bypasses floating stable via `+toolchain`); `paths-ignore` box was already done in Step 5. All DevOps + Security boxes checked; only Quality + Step 6 watch remain.
 - 2026-10-31: Step 5 DONE by parent (worker pool free-limit hit, config-only work). `contents: read` on ci/audit; release top-level narrowed to read, release job `write + id-token + attestations`; `SHA256SUMS.txt` + `attest-build-provenance@v2` (subject: checksums); weekly Dependabot (cargo + actions, limit 5, `chore` prefix); ci `paths-ignore` narrowed `.plan/**` -> `.plan/*.md` so `.schema.json` triggers CI. YAML validated, plan lint pass. Leftover: full SBOM skipped (checksums + attestation cover provenance; revisit if needed).
 - 2026-10-31: Step 4 DONE via worker (reviewed by parent). `Config::load` replaced by `try_load -> Result` (explicit `--config` missing/unparseable exits 1 with path; auto-detect warns + skips). `load_themes_with_errors` reports bad TOML, wrapper warns (all 3 callers covered). 7 new tests, 82 total pass, deny green, no old callers remain.
 - 2026-10-31: Step 3 DONE via worker (reviewed by parent). New `src/launch.rs` in lib: `split_editor_cmd`/`editor_command` via `shell-words@1.1.1`, `resolve_gloss_program` via `current_exe` sibling + PATH fallback (+`.exe` handling). All 4 sinks rewired, no-shell invariant kept. 9 new tests, 75 total pass, deny green. Leftover: `Config.editor` still unused (decide in Step 4).

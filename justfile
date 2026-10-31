@@ -19,6 +19,12 @@ check:
 test:
     cargo test
 
+# Build debug binaries and smoke-test both CLIs (also runs in CI)
+smoke:
+    cargo build
+    ./target/debug/plan --help
+    @echo '# hi' | ./target/debug/gloss --width 80
+
 # cargo build (debug)
 build:
     cargo build
