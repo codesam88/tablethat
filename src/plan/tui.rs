@@ -8,6 +8,7 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate as lib;
 use lib::Config;
@@ -49,6 +50,18 @@ fn attention_rank(status: &str) -> u8 {
     }
 }
 
+/// Esc-quit debounce transition: first Esc arms (no quit), a second Esc
+/// within 2s confirms, a stale arm re-arms. Pure for testability.
+fn confirm_quit(
+    armed_at: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> (bool, Option<std::time::Instant>) {
+    match armed_at {
+        Some(t) if now.duration_since(t) < std::time::Duration::from_secs(2) => (true, None),
+        _ => (false, Some(now)),
+    }
+}
+
 /// Truncate a slug to display width `n`, appending … when shortened.
 /// Floors to a char boundary, so multibyte slugs never panic slicing.
 fn truncate_slug(slug: &str, n: usize) -> String {
@@ -81,6 +94,7 @@ struct App<'a> {
     filter_area: Option<String>,
     filter_search: Option<String>,
     hide_done: bool,
+    esc_armed_at: Option<Instant>,
     mode: Mode,
     preview: Vec<Line<'static>>,
     preview_scroll: usize,
@@ -139,6 +153,7 @@ impl<'a> App<'a> {
             filter_area: None,
             filter_search: None,
             hide_done: cfg.hide_done,
+            esc_armed_at: None,
             mode: Mode::Browse,
             preview: Vec::new(),
             preview_scroll: 0,
@@ -730,6 +745,14 @@ impl App<'_> {
         .collect();
 
         let mut spans = vec![Span::styled(text, Style::default().fg(Color::DarkGray))];
+        if self.esc_armed_at.is_some() {
+            spans.push(Span::styled(
+                " Press Esc again to exit",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
         if !filters.is_empty() {
             spans.push(Span::raw("  "));
             spans.push(Span::styled("Filter:", Style::default().fg(Color::Yellow)));
@@ -815,11 +838,15 @@ impl App<'_> {
                         }
                     }
                     Mode::Browse => {
+                        // Any key but Esc re-arms the quit debounce.
+                        if !matches!(key.code, KeyCode::Esc) {
+                            self.esc_armed_at = None;
+                        }
                         return Ok(match key.code {
                             KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
                                 Action::Quit
                             }
-                            KeyCode::Char('q') | KeyCode::Esc => {
+                            KeyCode::Char('q') => {
                                 if self.has_active_filters() {
                                     self.filter_status = None;
                                     self.filter_type = None;
@@ -831,6 +858,23 @@ impl App<'_> {
                                     Action::None
                                 } else {
                                     Action::Quit
+                                }
+                            }
+                            KeyCode::Esc => {
+                                if self.has_active_filters() {
+                                    self.filter_status = None;
+                                    self.filter_type = None;
+                                    self.filter_priority = None;
+                                    self.filter_area = None;
+                                    self.filter_search = None;
+                                    self.hide_done = self.cfg.hide_done;
+                                    self.reload_tasks();
+                                    Action::None
+                                } else {
+                                    let (quit, armed) =
+                                        confirm_quit(self.esc_armed_at, Instant::now());
+                                    self.esc_armed_at = armed;
+                                    if quit { Action::Quit } else { Action::None }
                                 }
                             }
                             KeyCode::Enter if !self.columns.is_empty() => Action::OpenGloss,
@@ -1152,5 +1196,35 @@ mod nav_tests {
         assert_eq!((app.selected_column, app.selected_task), (0, 0));
         app.handle_task_key(KeyCode::PageUp);
         assert_eq!((app.selected_column, app.selected_task), (last, 0));
+    }
+}
+
+#[cfg(test)]
+mod esc_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn first_esc_arms_instead_of_quitting() {
+        let now = Instant::now();
+        let (quit, armed) = confirm_quit(None, now);
+        assert!(!quit);
+        assert_eq!(armed, Some(now));
+    }
+
+    #[test]
+    fn second_esc_within_two_seconds_quits() {
+        let t0 = Instant::now();
+        let (quit, _) = confirm_quit(Some(t0), t0 + Duration::from_secs(1));
+        assert!(quit);
+    }
+
+    #[test]
+    fn stale_arm_re_arms_instead_of_quitting() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_secs(3);
+        let (quit, armed) = confirm_quit(Some(t0), t1);
+        assert!(!quit);
+        assert_eq!(armed, Some(t1));
     }
 }
