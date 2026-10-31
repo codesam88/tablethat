@@ -29,30 +29,33 @@ pub struct LoadedTask {
     pub task: Task,
 }
 
-pub fn validate_all(root: &std::path::Path) -> bool {
+/// Validate every task file against the resolved schema.
+///
+/// Diagnostics are returned, never printed: `Ok(())` carries no news,
+/// `Err(errors)` carries one line per failure. Non-fatal notes (unknown
+/// keys, empty tree) go into `warnings`. Callers decide presentation
+/// and exit codes.
+pub fn validate_all(root: &std::path::Path, warnings: &mut Vec<String>) -> Result<(), Vec<String>> {
     let tasks_dir = root.join(lib::PLAN_DIR);
 
     let schema_path = match lib::resolve_file(root, ".plan", ".schema.json", "schema.json", "plan")
     {
         Some(p) => p,
         None => {
-            eprintln!("error: no schema found (searched .plan/.schema.json, config dir, data dir)");
-            return false;
+            return Err(vec![
+                "error: no schema found (searched .plan/.schema.json, config dir, data dir)".into(),
+            ]);
         }
     };
 
-    let schema: serde_json::Value = match std::fs::read_to_string(&schema_path) {
-        Ok(s) => match serde_json::from_str(&s) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("{}: invalid JSON — {e}", schema_path.display());
-                return false;
-            }
-        },
-        Err(e) => {
-            eprintln!("{}: cannot read — {e}", schema_path.display());
-            return false;
-        }
+    let schema: serde_json::Value = match std::fs::read_to_string(&schema_path)
+        .map_err(|e| format!("{}: cannot read — {e}", schema_path.display()))
+        .and_then(|s| {
+            serde_json::from_str(&s)
+                .map_err(|e| format!("{}: invalid JSON — {e}", schema_path.display()))
+        }) {
+        Ok(v) => v,
+        Err(e) => return Err(vec![e]),
     };
 
     let required: Vec<&str> = schema["required"]
@@ -64,24 +67,23 @@ pub fn validate_all(root: &std::path::Path) -> bool {
 
     let entries = match read_task_files(&tasks_dir) {
         Ok(v) => v,
-        Err(e) => {
-            eprintln!("{e}");
-            return false;
-        }
+        Err(e) => return Err(vec![e]),
     };
 
     if entries.is_empty() {
-        eprintln!("warning: no task files found in {}", tasks_dir.display());
+        warnings.push(format!(
+            "warning: no task files found in {}",
+            tasks_dir.display()
+        ));
     }
 
-    let mut ok = true;
+    let mut errors: Vec<String> = Vec::new();
 
     for path in &entries {
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("{}: FAIL — cannot read: {e}", path.display());
-                ok = false;
+                errors.push(format!("{}: FAIL — cannot read: {e}", path.display()));
                 continue;
             }
         };
@@ -89,8 +91,7 @@ pub fn validate_all(root: &std::path::Path) -> bool {
         let (frontmatter, line) = match parse_frontmatter(&content) {
             Ok(fm) => fm,
             Err(msg) => {
-                eprintln!("{}: FAIL — {msg}", path.display());
-                ok = false;
+                errors.push(format!("{}: FAIL — {msg}", path.display()));
                 continue;
             }
         };
@@ -98,30 +99,25 @@ pub fn validate_all(root: &std::path::Path) -> bool {
         let parsed: serde_json::Value = match serde_saphyr::from_str(&frontmatter) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("{}: FAIL — YAML parse error: {e}", path.display());
-                ok = false;
+                errors.push(format!("{}: FAIL — YAML parse error: {e}", path.display()));
                 continue;
             }
         };
 
-        if !parsed.is_object() {
-            eprintln!(
+        let Some(obj) = parsed.as_object() else {
+            errors.push(format!(
                 "{}: FAIL — frontmatter must be a YAML mapping",
                 path.display()
-            );
-            ok = false;
+            ));
             continue;
-        }
-
-        let obj = parsed.as_object().expect("checked is_object above");
+        };
 
         for field in &required {
             if !obj.contains_key(*field) {
-                eprintln!(
+                errors.push(format!(
                     "{}: FAIL — missing required field '{field}'",
                     path.display()
-                );
-                ok = false;
+                ));
             }
         }
 
@@ -135,19 +131,17 @@ pub fn validate_all(root: &std::path::Path) -> bool {
                         if !found {
                             let values: Vec<&str> =
                                 allowed.iter().filter_map(|a| a.as_str()).collect();
-                            eprintln!(
+                            errors.push(format!(
                                 "{}: FAIL — '{key}' must be one of [{}], got '{s}'",
                                 path.display(),
                                 values.join(", ")
-                            );
-                            ok = false;
+                            ));
                         }
                     } else {
-                        eprintln!(
+                        errors.push(format!(
                             "{}: FAIL — '{key}' must be a string, got {val}",
                             path.display()
-                        );
-                        ok = false;
+                        ));
                     }
                 }
             }
@@ -163,20 +157,24 @@ pub fn validate_all(root: &std::path::Path) -> bool {
 
         for k in unknown_keys {
             if line > 0 {
-                eprintln!(
+                warnings.push(format!(
                     "{}:{line}: WARNING — unknown frontmatter key '{k}'",
                     path.display()
-                );
+                ));
             } else {
-                eprintln!(
+                warnings.push(format!(
                     "{}: WARNING — unknown frontmatter key '{k}'",
                     path.display()
-                );
+                ));
             }
         }
     }
 
-    ok
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -191,7 +189,18 @@ pub fn list_tasks(
     kanban: bool,
     sort_keys: &[String],
 ) {
-    let _ = validate_all(root);
+    let mut lint_warnings = Vec::new();
+    match validate_all(root, &mut lint_warnings) {
+        Ok(()) => {}
+        Err(lint_errors) => {
+            for e in &lint_errors {
+                eprintln!("{e}");
+            }
+        }
+    }
+    for w in &lint_warnings {
+        eprintln!("{w}");
+    }
 
     let tasks_dir = root.join(lib::PLAN_DIR);
 
@@ -757,7 +766,7 @@ pub fn resolve_single_slug(root: &std::path::Path, query: &str) -> Option<PathBu
 
     match matches.len() {
         0 => None,
-        1 => Some(matches.into_iter().next().expect("checked len")),
+        1 => matches.into_iter().next(),
         _ => select_slug(&matches),
     }
 }
@@ -765,17 +774,13 @@ pub fn resolve_single_slug(root: &std::path::Path, query: &str) -> Option<PathBu
 fn parse_frontmatter(content: &str) -> Result<(String, usize), String> {
     let mut lines = content.lines().enumerate();
 
-    let first = lines.find(|(_, l)| l.trim() == "---");
-    if first.is_none() {
+    let Some((first_line, _)) = lines.find(|(_, l)| l.trim() == "---") else {
         return Err("no frontmatter delimiters found".into());
-    }
-    let (first_line, _) = first.expect("checked is_none above");
+    };
 
-    let second = lines.find(|(_, l)| l.trim() == "---");
-    if second.is_none() {
+    let Some((second_line, _)) = lines.find(|(_, l)| l.trim() == "---") else {
         return Err("unclosed frontmatter (missing closing ---)".into());
-    }
-    let (second_line, _) = second.expect("checked is_none above");
+    };
 
     let start = first_line + 1;
     let end = second_line;
@@ -856,6 +861,8 @@ fn is_valid_slug(slug: &str) -> bool {
             .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
 }
 
+/// Create a task file. Returns the created path; all diagnostics are
+/// `Err` strings for the caller to present.
 pub fn create_task(
     root: &std::path::Path,
     slug: &str,
@@ -863,10 +870,11 @@ pub fn create_task(
     task_type: &str,
     priority: &str,
     area: &str,
-) -> bool {
+) -> Result<PathBuf, String> {
     if !is_valid_slug(slug) {
-        eprintln!("invalid slug: '{slug}' (must match ^[a-z0-9]+(?:-[a-z0-9]+)*$)");
-        return false;
+        return Err(format!(
+            "invalid slug: '{slug}' (must match ^[a-z0-9]+(?:-[a-z0-9]+)*$)"
+        ));
     }
 
     let tasks_dir = root.join(lib::PLAN_DIR);
@@ -874,29 +882,23 @@ pub fn create_task(
 
     // Defense in depth: the resolved path must stay inside the tasks dir.
     if path.strip_prefix(&tasks_dir).is_err() {
-        eprintln!("invalid slug: '{slug}' escapes the task directory");
-        return false;
+        return Err(format!("invalid slug: '{slug}' escapes the task directory"));
     }
 
     if path.exists() {
-        eprintln!("task already exists: {}", path.display());
-        return false;
+        return Err(format!("task already exists: {}", path.display()));
     }
 
     let content = format!(
         "---\nstatus: {status}\ntype: {task_type}\npriority: {priority}\narea: {area}\n---\n\n## Notes\n\n"
     );
 
-    if let Err(e) = std::fs::write(&path, &content) {
-        eprintln!("{}: cannot write — {e}", path.display());
-        return false;
-    }
-
-    eprintln!("created {}", path.display());
-    true
+    std::fs::write(&path, &content)
+        .map_err(|e| format!("{}: cannot write — {e}", path.display()))?;
+    Ok(path)
 }
 
-pub fn open_task(path: &std::path::Path, width: usize) -> bool {
+pub fn open_task(path: &std::path::Path, width: usize) -> Result<(), String> {
     let gloss = lib::launch::resolve_gloss_program();
     match std::process::Command::new(&gloss)
         .arg("--width")
@@ -904,22 +906,15 @@ pub fn open_task(path: &std::path::Path, width: usize) -> bool {
         .arg(path)
         .status()
     {
-        Ok(status) => status.success(),
-        Err(e) => {
-            eprintln!("failed to launch gloss: {e}");
-            false
-        }
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("gloss exited with code: {:?}", status.code())),
+        Err(e) => Err(format!("failed to launch gloss: {e}")),
     }
 }
 
-pub fn delete_task(path: &std::path::Path) -> bool {
-    if let Err(e) = std::fs::remove_file(path) {
-        eprintln!("{}: cannot delete — {e}", path.display());
-        return false;
-    }
-
-    eprintln!("deleted {}", path.display());
-    true
+pub fn delete_task(path: &std::path::Path) -> Result<PathBuf, String> {
+    std::fs::remove_file(path).map_err(|e| format!("{}: cannot delete — {e}", path.display()))?;
+    Ok(path.to_path_buf())
 }
 
 /// Re-emit a task file with canonical frontmatter field ordering and clean formatting.
@@ -991,25 +986,17 @@ fn format_markdown_body(body: &str, width: usize) -> String {
     lib::markdown::format_commonmark(body, width)
 }
 
-pub fn format_file(path: &std::path::Path, width: usize) -> bool {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{}: cannot read — {e}", path.display());
-            return false;
-        }
-    };
+/// Format one file in place. Returns whether the file changed;
+/// failures are `Err` strings for the caller to present.
+pub fn format_file(path: &std::path::Path, width: usize) -> Result<bool, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("{}: cannot read — {e}", path.display()))?;
 
     let formatted = if path.extension().is_some_and(|ext| ext == "md") {
         // Check if file has frontmatter
         if content.trim_start().starts_with("---") {
-            match normalize_frontmatter(&content) {
-                Ok(n) => n,
-                Err(e) => {
-                    eprintln!("{}: cannot normalize — {e}", path.display());
-                    return false;
-                }
-            }
+            normalize_frontmatter(&content)
+                .map_err(|e| format!("{}: cannot normalize — {e}", path.display()))?
         } else {
             format_markdown_body(&content, width)
         }
@@ -1018,35 +1005,31 @@ pub fn format_file(path: &std::path::Path, width: usize) -> bool {
     };
 
     if formatted != content {
-        if let Err(e) = std::fs::write(path, &formatted) {
-            eprintln!("{}: cannot write — {e}", path.display());
-            return false;
-        }
-        eprintln!("formatted {}", path.display());
+        std::fs::write(path, &formatted)
+            .map_err(|e| format!("{}: cannot write — {e}", path.display()))?;
+        return Ok(true);
     }
-    true
+    Ok(false)
 }
 
-pub fn normalize_all(root: &std::path::Path) -> bool {
+/// Normalize every task file. Returns the count of files changed;
+/// per-file failures are collected into `Err` for the caller to present.
+pub fn normalize_all(root: &std::path::Path) -> Result<usize, Vec<String>> {
     let tasks_dir = root.join(lib::PLAN_DIR);
 
     let entries = match read_task_files(&tasks_dir) {
         Ok(v) => v,
-        Err(e) => {
-            eprintln!("{e}");
-            return false;
-        }
+        Err(e) => return Err(vec![e]),
     };
 
     let mut fixed = 0;
-    let mut ok = true;
+    let mut errors: Vec<String> = Vec::new();
 
     for path in &entries {
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("{}: cannot read — {e}", path.display());
-                ok = false;
+                errors.push(format!("{}: cannot read — {e}", path.display()));
                 continue;
             }
         };
@@ -1054,29 +1037,24 @@ pub fn normalize_all(root: &std::path::Path) -> bool {
         let normalized = match normalize_frontmatter(&content) {
             Ok(n) => n,
             Err(e) => {
-                eprintln!("{}: cannot normalize — {e}", path.display());
-                ok = false;
+                errors.push(format!("{}: cannot normalize — {e}", path.display()));
                 continue;
             }
         };
 
         if normalized != content {
-            if let Err(e) = std::fs::write(path, &normalized) {
-                eprintln!("{}: cannot write — {e}", path.display());
-                ok = false;
-            } else {
-                eprintln!("fixed {}", path.display());
-                fixed += 1;
+            match std::fs::write(path, &normalized) {
+                Ok(()) => fixed += 1,
+                Err(e) => errors.push(format!("{}: cannot write — {e}", path.display())),
             }
         }
     }
 
-    if fixed > 0 {
-        eprintln!("fixed {fixed} file(s)");
-    } else if ok {
-        eprintln!("all files already canonical");
+    if errors.is_empty() {
+        Ok(fixed)
+    } else {
+        Err(errors)
     }
-    ok
 }
 
 #[cfg(test)]
@@ -1366,7 +1344,7 @@ mod tests {
         std::fs::create_dir(root.join(".plan")).unwrap();
         for slug in ["../foo", "..", "a/../b", "/abs", "foo/bar"] {
             assert!(
-                !create_task(root, slug, "open", "bug", "high", ""),
+                create_task(root, slug, "open", "bug", "high", "").is_err(),
                 "slug '{slug}' must be rejected"
             );
         }
@@ -1388,7 +1366,7 @@ mod tests {
         let root = tmp.path();
         // If `a/../b` ever reached the fs, it would resolve to `.plan/b.md`.
         std::fs::create_dir_all(root.join(".plan/a")).unwrap();
-        assert!(!create_task(root, "a/../b", "open", "bug", "high", ""));
+        assert!(create_task(root, "a/../b", "open", "bug", "high", "").is_err());
         assert!(!root.join(".plan/b.md").exists());
         assert!(!root.join(".plan/a/b.md").exists());
     }
@@ -1400,7 +1378,7 @@ mod tests {
         std::fs::create_dir(root.join(".plan")).unwrap();
         for slug in ["Foo_Bar", "a b", "", "a.b"] {
             assert!(
-                !create_task(root, slug, "open", "bug", "high", ""),
+                create_task(root, slug, "open", "bug", "high", "").is_err(),
                 "slug '{slug}' must be rejected"
             );
         }
@@ -1418,7 +1396,7 @@ mod tests {
         std::fs::create_dir(root.join(".plan")).unwrap();
         for slug in ["-foo", "foo-"] {
             assert!(
-                !create_task(root, slug, "open", "bug", "high", ""),
+                create_task(root, slug, "open", "bug", "high", "").is_err(),
                 "slug '{slug}' must be rejected"
             );
         }
@@ -1430,18 +1408,124 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         std::fs::create_dir(root.join(".plan")).unwrap();
-        assert!(create_task(
-            root,
-            "my-task-123",
-            "open",
-            "bug",
-            "high",
-            "backend"
-        ));
+        assert!(create_task(root, "my-task-123", "open", "bug", "high", "backend").is_ok());
         let path = root.join(".plan/my-task-123.md");
         assert!(path.exists());
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("status: open"));
         assert!(content.contains("type: bug"));
+    }
+
+    // --- Result contracts (bool + eprintln -> Result) ---
+
+    const TEST_SCHEMA: &str = r#"{
+        "required": ["status", "type", "priority"],
+        "properties": {
+            "status": {"enum": ["open", "done"]},
+            "type": {"enum": ["bug", "feature"]},
+            "priority": {"enum": ["high", "low"]}
+        }
+    }"#;
+
+    fn plan_root_with_schema() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join(".plan")).unwrap();
+        std::fs::write(tmp.path().join(".plan/.schema.json"), TEST_SCHEMA).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn create_task_ok_carries_created_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join(".plan")).unwrap();
+        let path = create_task(root, "pathed", "open", "bug", "high", "").expect("created");
+        assert_eq!(path, root.join(".plan/pathed.md"));
+        assert!(path.is_file());
+    }
+
+    #[test]
+    fn format_file_reports_changed_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Canonical content is a fixpoint: Ok(false), byte-identical.
+        let path = dir.join("a.md");
+        std::fs::write(
+            &path,
+            "---\nstatus: open\ntype: bug\npriority: high\n---\n\nbody\n",
+        )
+        .unwrap();
+        assert_eq!(format_file(&path, 120).expect("formats"), false);
+        // Scrambled order is fixed: Ok(true).
+        std::fs::write(
+            &path,
+            "---\npriority: high\nstatus: open\ntype: bug\n---\n\nbody\n",
+        )
+        .unwrap();
+        assert_eq!(format_file(&path, 120).expect("formats"), true);
+        // Missing file is an error, not silent false.
+        assert!(format_file(&dir.join("missing.md"), 120).is_err());
+    }
+
+    #[test]
+    fn validate_all_collects_errors_and_warnings() {
+        let tmp = plan_root_with_schema();
+        let root = tmp.path();
+        std::fs::write(
+            root.join(".plan/good.md"),
+            "---\nstatus: open\ntype: bug\npriority: high\n---\n\nok\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".plan/bad.md"),
+            "---\nstatus: open\ntype: bug\n---\n\nmissing priority\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".plan/warn.md"),
+            "---\nstatus: done\ntype: feature\npriority: low\ncustom: x\n---\n\nok\n",
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        let errors = validate_all(root, &mut warnings).expect_err("bad.md must fail");
+        assert_eq!(warnings.len(), 1, "warn.md unknown key: {warnings:?}");
+        assert!(
+            warnings[0].contains("custom"),
+            "warning names the key: {}",
+            warnings[0]
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("priority")),
+            "error names the missing field: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_all_ok_carries_warnings() {
+        let tmp = plan_root_with_schema();
+        let root = tmp.path();
+        std::fs::write(
+            root.join(".plan/warn.md"),
+            "---\nstatus: done\ntype: feature\npriority: low\ncustom: x\n---\n\nok\n",
+        )
+        .unwrap();
+        let mut warnings = Vec::new();
+        validate_all(root, &mut warnings).expect("no errors");
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn normalize_all_returns_fixed_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join(".plan")).unwrap();
+        std::fs::write(
+            root.join(".plan/a.md"),
+            "---\npriority: high\nstatus: open\ntype: bug\n---\n\nbody\n",
+        )
+        .unwrap();
+        assert_eq!(normalize_all(root).expect("normalizes"), 1);
+        assert_eq!(normalize_all(root).expect("idempotent"), 0);
     }
 }

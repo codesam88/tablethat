@@ -233,10 +233,15 @@ fn main() {
             type_,
             priority,
             area,
-        }) => {
-            let ok = tasks::create_task(&root, &slug, &status, &type_, &priority, &area);
-            std::process::exit(if ok { 0 } else { 1 });
-        }
+        }) => match tasks::create_task(&root, &slug, &status, &type_, &priority, &area) {
+            Ok(path) => {
+                eprintln!("created {}", path.display());
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        },
         Some(Commands::Open { slug }) => {
             let path = match tasks::resolve_single_slug(&root, &slug) {
                 Some(p) => p,
@@ -245,8 +250,13 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let ok = tasks::open_task(&path, cfg.pager_width);
-            std::process::exit(if ok { 0 } else { 1 });
+            match tasks::open_task(&path, cfg.pager_width) {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
         }
         Some(Commands::Delete { slug }) => {
             let path = match tasks::resolve_single_slug(&root, &slug) {
@@ -256,8 +266,15 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let ok = tasks::delete_task(&path);
-            std::process::exit(if ok { 0 } else { 1 });
+            match tasks::delete_task(&path) {
+                Ok(deleted) => {
+                    eprintln!("deleted {}", deleted.display());
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
         }
         Some(Commands::Browse {
             status,
@@ -280,8 +297,22 @@ fn main() {
             tasks::init_plan(&root);
         }
         Some(Commands::Lint) => {
-            let ok = tasks::validate_all(&root);
-            std::process::exit(if ok { 0 } else { 1 });
+            let mut warnings = Vec::new();
+            match tasks::validate_all(&root, &mut warnings) {
+                Ok(()) => {}
+                Err(errors) => {
+                    for e in &errors {
+                        eprintln!("{e}");
+                    }
+                    for w in &warnings {
+                        eprintln!("{w}");
+                    }
+                    std::process::exit(1);
+                }
+            }
+            for w in &warnings {
+                eprintln!("{w}");
+            }
         }
         Some(Commands::Format { path }) => match path {
             Some(p) => {
@@ -293,25 +324,42 @@ fn main() {
                         .map(|e| e.path())
                         .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
                         .collect();
-                    let mut ok = true;
+                    let mut failed = false;
                     for entry in &entries {
-                        if !tasks::format_file(entry, 120) {
-                            ok = false;
+                        match tasks::format_file(entry, 120) {
+                            Ok(true) => eprintln!("formatted {}", entry.display()),
+                            Ok(false) => {}
+                            Err(e) => {
+                                eprintln!("{e}");
+                                failed = true;
+                            }
                         }
                     }
-                    std::process::exit(if ok { 0 } else { 1 });
+                    std::process::exit(if failed { 1 } else { 0 });
                 } else if p.is_file() {
-                    let ok = tasks::format_file(&p, 120);
-                    std::process::exit(if ok { 0 } else { 1 });
+                    match tasks::format_file(&p, 120) {
+                        Ok(true) => eprintln!("formatted {}", p.display()),
+                        Ok(false) => {}
+                        Err(e) => {
+                            eprintln!("{e}");
+                            std::process::exit(1);
+                        }
+                    }
                 } else {
                     eprintln!("{}: not a file or directory", p.display());
                     std::process::exit(1);
                 }
             }
-            None => {
-                let ok = tasks::normalize_all(&root);
-                std::process::exit(if ok { 0 } else { 1 });
-            }
+            None => match tasks::normalize_all(&root) {
+                Ok(0) => eprintln!("all files already canonical"),
+                Ok(n) => eprintln!("fixed {n} file(s)"),
+                Err(errors) => {
+                    for e in &errors {
+                        eprintln!("{e}");
+                    }
+                    std::process::exit(1);
+                }
+            },
         },
         None => {
             // Default view from config

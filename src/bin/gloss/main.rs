@@ -79,7 +79,10 @@ fn main() {
         }
         // Filter mode: stdin piped
         None if !is_tty => {
-            filter::run_filter(&theme, cli.no_color, width);
+            if let Err(e) = filter::run_filter(&theme, cli.no_color, width) {
+                eprintln!("gloss: {e}");
+                std::process::exit(1);
+            }
         }
         // No arg + tty: browse .md files in cwd
         None => {

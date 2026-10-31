@@ -4,11 +4,11 @@ use tablethat_lib::theme::ThemeFile;
 use termcolor::{ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 /// Run in filter mode: read markdown from stdin, render styled output to stdout.
-pub fn run_filter(theme: &ThemeFile, no_color: bool, width: usize) {
+pub fn run_filter(theme: &ThemeFile, no_color: bool, width: usize) -> Result<(), String> {
     let mut input = String::new();
     io::stdin()
         .read_to_string(&mut input)
-        .expect("failed to read stdin");
+        .map_err(|e| format!("failed to read stdin: {e}"))?;
 
     let md_theme = markdown::theme_from_cfg(&theme.theme);
     let lines = markdown::render_markdown(&md_theme, &input, width);
@@ -37,6 +37,7 @@ pub fn run_filter(theme: &ThemeFile, no_color: bool, width: usize) {
             let _ = out.write_all(b"\n");
         }
     }
+    Ok(())
 }
 
 fn atty_check() -> bool {

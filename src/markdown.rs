@@ -149,7 +149,7 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
             } else if ch == ']' {
                 // Standalone ']' - could be start of '](' link syntax
                 push_char(&mut pending, ch, style);
-            } else if ch == '(' && !pending.is_empty() && pending.last().unwrap().0.ends_with(']') {
+            } else if ch == '(' && pending.last().is_some_and(|last| last.0.ends_with(']')) {
                 // '(' immediately after ']' - this is '](' link syntax
                 // Commit pending up to and including ']', then start new group with '('
                 let plen = pending_len(&pending);
