@@ -192,7 +192,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 search.as_deref(),
                 false,
                 &sort,
-            );
+            )?;
             Ok(())
         }
         Some(Commands::Kanban {
@@ -213,7 +213,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 search.as_deref(),
                 true,
                 &sort,
-            );
+            )?;
             Ok(())
         }
         Some(Commands::Add {
@@ -350,7 +350,7 @@ fn run(cli: Cli) -> Result<(), String> {
                         None,
                         true,
                         &[],
-                    );
+                    )?;
                 }
                 _ => {
                     tablethat_lib::plan::display::list_tasks(
@@ -363,7 +363,7 @@ fn run(cli: Cli) -> Result<(), String> {
                         None,
                         false,
                         &[],
-                    );
+                    )?;
                 }
             }
             Ok(())

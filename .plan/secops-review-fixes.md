@@ -19,7 +19,7 @@ then ride-alongs.
 - [x] Step 2: gloss highlight Unicode panic — char-aware offsets (TDD).
 - [x] Step 3: release gates — test/clippy/audit before publish.
 - [x] Step 4: pin action SHAs.
-- [ ] Step 5: `list_tasks` returns `Result` (drop lib `exit`).
+- [x] Step 5: `list_tasks` returns `Result` (drop lib `exit`).
 - [ ] Step 6: slug truncation char boundary (+ helper test).
 - [ ] Step 7: MSRV job runs check + smoke, not just test.
 - [ ] Step 8: fix intra-doc links (`cargo doc` clean).
@@ -33,6 +33,10 @@ then ride-alongs.
 
 ## Progress (newest first)
 
+- 2026-10-31: Step 5 DONE (TDD: test RED uncompilable, GREEN first pass).
+  `list_tasks -> Result<(), String>`; 4 CLI arms use `?`; lib has zero
+  `process::exit` left. Test uses `.plan`-as-file trick for portable
+  unreadable-dir failure. 122 green.
 - 2026-10-31: Step 4 DONE (config-only). All 18 action refs pinned to SHAs
   (resolved via GitHub API today) with `# vX` comments so Dependabot keeps
   updating them. YAML validated.

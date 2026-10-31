@@ -6,7 +6,7 @@ use std::io::Write;
 use termcolor::{ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 /// Validate, filter, sort, and print the task list (table or kanban).
-/// Validation diagnostics print to stderr; an unreadable task dir exits 1.
+/// Validation diagnostics print to stderr; an unreadable task dir is `Err`.
 #[allow(clippy::too_many_arguments)]
 pub fn list_tasks(
     root: &std::path::Path,
@@ -18,7 +18,7 @@ pub fn list_tasks(
     search_query: Option<&str>,
     kanban: bool,
     sort_keys: &[String],
-) {
+) -> Result<(), String> {
     let mut lint_warnings = Vec::new();
     match super::lint::validate_all(root, &mut lint_warnings) {
         Ok(()) => {}
@@ -34,13 +34,7 @@ pub fn list_tasks(
 
     let tasks_dir = root.join(crate::PLAN_DIR);
 
-    let entries = match store::read_task_files(&tasks_dir) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+    let entries = store::read_task_files(&tasks_dir)?;
 
     let all_tasks = query::load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
     let exclude: Vec<String> = if cfg.hide_done {
@@ -60,7 +54,7 @@ pub fn list_tasks(
 
     if tasks.is_empty() {
         println!("(no tasks match filters)");
-        return;
+        return Ok(());
     }
 
     let effective_sort: Vec<String> = if sort_keys.is_empty() {
@@ -82,6 +76,7 @@ pub fn list_tasks(
     } else {
         display_table(&tasks, &cfg.colors);
     }
+    Ok(())
 }
 
 macro_rules! write_colored {
@@ -298,4 +293,21 @@ fn display_table(tasks: &[LoadedTask], colors: &ColorsConfig) {
         );
     }
     let _ = writeln!(stdout);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_tasks_unreadable_dir_is_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        // .plan exists as a FILE so read_task_files fails deterministically
+        // on every platform (no chmod/privilege games).
+        std::fs::write(tmp.path().join(".plan"), "not a dir").unwrap();
+        let cfg = Config::default();
+        let err = list_tasks(tmp.path(), &cfg, None, None, None, None, None, false, &[])
+            .expect_err("unreadable task dir must be an error, not exit(1)");
+        assert!(err.contains(".plan"), "error names the dir: {err}");
+    }
 }
