@@ -68,10 +68,10 @@ intermediate (churn on churn, settled in `9dd6d68`).
 - [x] Step 4b (worker): -> `display.rs` (display fns, delete termcolor
   wrappers, use `crate::color`), `store.rs` (paths/resolve/init/CRUD/slug),
   `format.rs` (normalize/format fns). Byte-identical bodies.
-- [ ] Step 5 (worker): extract `markdown_fmt.rs` (format_commonmark,
+- [x] Step 5 (worker): extract `markdown_fmt.rs` (format_commonmark,
   align_tables, strip_trailing_whitespace) + 2-3 direct `align_tables`
   tests; fix `tests/gloss_render.rs` import (1 line).
-- [ ] Step 6 (worker or parent): thin mains to clap structs + `run()`
+- [x] Step 6 (worker or parent): thin mains to clap structs + `run()`
   returning `Result<(), String>`, single exit point each.
 
 ## Acceptance
@@ -83,6 +83,15 @@ intermediate (churn on churn, settled in `9dd6d68`).
 
 ## Progress (newest first)
 
+- 2026-10-31: Step 6 DONE (worker, reviewed). Both mains are clap structs
+  + `run() -> Result<(), String>` with one exit point each (`plan:` /
+  `gloss:` prefix). Stderr-evidence check justified the prefix (e2e pins
+  codes + stdout only). All steps complete: 107 tests green, no `#[path]`,
+  no dup helpers, bins are glue. Left: god-file checkbox in
+  maintenance-hardening + final acceptance pass.
+- 2026-10-31: Step 5 DONE (worker, reviewed). `markdown_fmt.rs` extracted
+  + 3 direct align_tables tests (were indirect-only). 107 green.
+  Hardened brief held: no stray .plan/git mutation this run.
 - 2026-10-31: Steps 2-4b DONE (workers, parent-reviewed each). lib.rs split
   (config/theme/color, lib.rs now 11 lines); re-home to lib (no `#[path]`
   left, dup test + tui wrappers deleted); tasks.rs split into

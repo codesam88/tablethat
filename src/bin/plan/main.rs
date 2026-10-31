@@ -163,16 +163,8 @@ enum Commands {
     },
 }
 
-fn main() {
-    let cli = Cli::parse();
-
-    let mut cfg = match lib::Config::try_load("plan", "PLAN_", cli.config.as_deref()) {
-        Ok(cfg) => cfg,
-        Err(err) => {
-            eprintln!("plan: {err}");
-            std::process::exit(1);
-        }
-    };
+fn run(cli: Cli) -> Result<(), String> {
+    let mut cfg = lib::Config::try_load("plan", "PLAN_", cli.config.as_deref())?;
     if cli.root.is_some() {
         cfg.root = cli.root;
     }
@@ -201,6 +193,7 @@ fn main() {
                 false,
                 &sort,
             );
+            Ok(())
         }
         Some(Commands::Kanban {
             status,
@@ -221,6 +214,7 @@ fn main() {
                 true,
                 &sort,
             );
+            Ok(())
         }
         Some(Commands::Add {
             slug,
@@ -233,44 +227,29 @@ fn main() {
         ) {
             Ok(path) => {
                 eprintln!("created {}", path.display());
+                Ok(())
             }
-            Err(e) => {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
+            Err(e) => Err(e),
         },
         Some(Commands::Open { slug }) => {
             let path = match tablethat_lib::plan::store::resolve_single_slug(&root, &slug) {
                 Some(p) => p,
-                None => {
-                    eprintln!("no task matching '{slug}'");
-                    std::process::exit(1);
-                }
+                None => return Err(format!("no task matching '{slug}'")),
             };
-            match tablethat_lib::plan::store::open_task(&path, cfg.pager_width) {
-                Ok(()) => {}
-                Err(e) => {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                }
-            }
+            tablethat_lib::plan::store::open_task(&path, cfg.pager_width)?;
+            Ok(())
         }
         Some(Commands::Delete { slug }) => {
             let path = match tablethat_lib::plan::store::resolve_single_slug(&root, &slug) {
                 Some(p) => p,
-                None => {
-                    eprintln!("no task matching '{slug}'");
-                    std::process::exit(1);
-                }
+                None => return Err(format!("no task matching '{slug}'")),
             };
             match tablethat_lib::plan::store::delete_task(&path) {
                 Ok(deleted) => {
                     eprintln!("deleted {}", deleted.display());
+                    Ok(())
                 }
-                Err(e) => {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                }
+                Err(e) => Err(e),
             }
         }
         Some(Commands::Browse {
@@ -289,27 +268,26 @@ fn main() {
                 area.as_deref(),
                 search.as_deref(),
             );
+            Ok(())
         }
         Some(Commands::Init) => {
             tablethat_lib::plan::store::init_plan(&root);
+            Ok(())
         }
         Some(Commands::Lint) => {
             let mut warnings = Vec::new();
             match tablethat_lib::plan::lint::validate_all(&root, &mut warnings) {
                 Ok(()) => {}
                 Err(errors) => {
-                    for e in &errors {
-                        eprintln!("{e}");
-                    }
-                    for w in &warnings {
-                        eprintln!("{w}");
-                    }
-                    std::process::exit(1);
+                    let mut all = errors;
+                    all.extend(warnings);
+                    return Err(all.join("\n"));
                 }
             }
             for w in &warnings {
                 eprintln!("{w}");
             }
+            Ok(())
         }
         Some(Commands::Format { path }) => match path {
             Some(p) => {
@@ -321,41 +299,41 @@ fn main() {
                         .map(|e| e.path())
                         .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
                         .collect();
-                    let mut failed = false;
+                    let mut errors: Vec<String> = Vec::new();
                     for entry in &entries {
                         match tablethat_lib::plan::format::format_file(entry, 120) {
                             Ok(true) => eprintln!("formatted {}", entry.display()),
                             Ok(false) => {}
-                            Err(e) => {
-                                eprintln!("{e}");
-                                failed = true;
-                            }
+                            Err(e) => errors.push(e),
                         }
                     }
-                    std::process::exit(if failed { 1 } else { 0 });
+                    if !errors.is_empty() {
+                        return Err(errors.join("\n"));
+                    }
+                    Ok(())
                 } else if p.is_file() {
                     match tablethat_lib::plan::format::format_file(&p, 120) {
-                        Ok(true) => eprintln!("formatted {}", p.display()),
-                        Ok(false) => {}
-                        Err(e) => {
-                            eprintln!("{e}");
-                            std::process::exit(1);
+                        Ok(true) => {
+                            eprintln!("formatted {}", p.display());
+                            Ok(())
                         }
+                        Ok(false) => Ok(()),
+                        Err(e) => Err(e),
                     }
                 } else {
-                    eprintln!("{}: not a file or directory", p.display());
-                    std::process::exit(1);
+                    Err(format!("{}: not a file or directory", p.display()))
                 }
             }
             None => match tablethat_lib::plan::format::normalize_all(&root) {
-                Ok(0) => eprintln!("all files already canonical"),
-                Ok(n) => eprintln!("fixed {n} file(s)"),
-                Err(errors) => {
-                    for e in &errors {
-                        eprintln!("{e}");
-                    }
-                    std::process::exit(1);
+                Ok(0) => {
+                    eprintln!("all files already canonical");
+                    Ok(())
                 }
+                Ok(n) => {
+                    eprintln!("fixed {n} file(s)");
+                    Ok(())
+                }
+                Err(errors) => Err(errors.join("\n")),
             },
         },
         None => {
@@ -388,6 +366,15 @@ fn main() {
                     );
                 }
             }
+            Ok(())
         }
+    }
+}
+
+fn main() {
+    let cli = Cli::parse();
+    if let Err(e) = run(cli) {
+        eprintln!("plan: {e}");
+        std::process::exit(1);
     }
 }

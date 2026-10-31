@@ -31,16 +31,8 @@ struct Cli {
     width: Option<usize>,
 }
 
-fn main() {
-    let cli = Cli::parse();
-
-    let cfg = match lib::Config::try_load("gloss", "GLOSS_", cli.config.as_deref()) {
-        Ok(cfg) => cfg,
-        Err(err) => {
-            eprintln!("gloss: {err}");
-            std::process::exit(1);
-        }
-    };
+fn run(cli: Cli) -> Result<(), String> {
+    let cfg = lib::Config::try_load("gloss", "GLOSS_", cli.config.as_deref())?;
     let themes = lib::theme::load_themes(cfg.themes_dir.as_deref(), "gloss");
     let default_width = crossterm::terminal::size()
         .map(|(cols, _)| cols as usize)
@@ -59,31 +51,38 @@ fn main() {
     };
 
     let is_tty = is_tty();
+    let no_color = cli.no_color;
 
     match cli.path {
         // TUI mode: file or directory argument provided, or no arg but tty
         Some(path) if path.is_file() => {
             tablethat_lib::gloss::tui::run_file_viewer(&path, &cfg, &themes, 0, width);
+            Ok(())
         }
         Some(path) if path.is_dir() => {
             tablethat_lib::gloss::tui::run_directory_browser(&path, &cfg, &themes, width);
+            Ok(())
         }
-        Some(path) => {
-            eprintln!("gloss: {}: not a file or directory", path.display());
-            std::process::exit(1);
-        }
+        Some(path) => Err(format!("{}: not a file or directory", path.display())),
         // Filter mode: stdin piped
         None if !is_tty => {
-            if let Err(e) = tablethat_lib::gloss::filter::run_filter(&theme, cli.no_color, width) {
-                eprintln!("gloss: {e}");
-                std::process::exit(1);
-            }
+            tablethat_lib::gloss::filter::run_filter(&theme, no_color, width)?;
+            Ok(())
         }
         // No arg + tty: browse .md files in cwd
         None => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             tablethat_lib::gloss::tui::run_directory_browser(&cwd, &cfg, &themes, width);
+            Ok(())
         }
+    }
+}
+
+fn main() {
+    let cli = Cli::parse();
+    if let Err(e) = run(cli) {
+        eprintln!("gloss: {e}");
+        std::process::exit(1);
     }
 }
 
