@@ -220,6 +220,19 @@ impl App {
         }
     }
 
+    /// Full-viewport page step (at least 1: viewport is unknown pre-render).
+    fn page_step(&self) -> usize {
+        self.viewport_height.max(1)
+    }
+
+    fn page_up(&mut self) {
+        self.scroll = self.scroll.saturating_sub(self.page_step());
+    }
+
+    fn page_down(&mut self) {
+        self.scroll = self.scroll.saturating_add(self.page_step());
+    }
+
     fn current_file(&self) -> Option<&Path> {
         self.files.get(self.selected).map(|p| p.as_path())
     }
@@ -506,10 +519,10 @@ fn handle_events(app: &mut App, _cfg: &lib::Config) -> Result<Action, Box<dyn st
                     app.scroll = app.scroll.saturating_add(1);
                 }
                 KeyCode::PageUp => {
-                    app.scroll = app.scroll.saturating_sub(20);
+                    app.page_up();
                 }
                 KeyCode::PageDown | KeyCode::Char(' ') => {
-                    app.scroll = app.scroll.saturating_add(20);
+                    app.page_down();
                 }
                 KeyCode::Left | KeyCode::Char('h') => {
                     app.offset = app.offset.saturating_sub(8);
@@ -586,5 +599,44 @@ mod tests {
     #[test]
     fn ci_match_ranges_empty_query_is_empty() {
         assert!(ci_match_ranges("anything", "").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod paging_tests {
+    use super::*;
+
+    fn app_with_scroll(scroll: usize, viewport_height: usize) -> App {
+        let mut app = App::new(Vec::new(), Vec::new(), 80);
+        app.scroll = scroll;
+        app.viewport_height = viewport_height;
+        app
+    }
+
+    #[test]
+    fn page_up_subtracts_viewport_height() {
+        let mut app = app_with_scroll(50, 24);
+        app.page_up();
+        assert_eq!(app.scroll, 26);
+    }
+
+    #[test]
+    fn page_down_adds_viewport_height() {
+        let mut app = app_with_scroll(0, 24);
+        app.page_down();
+        assert_eq!(app.scroll, 24);
+    }
+
+    #[test]
+    fn page_up_saturates_at_top() {
+        let mut app = app_with_scroll(5, 24);
+        app.page_up();
+        assert_eq!(app.scroll, 0);
+    }
+
+    #[test]
+    fn page_step_is_at_least_one() {
+        let app = app_with_scroll(0, 0);
+        assert_eq!(app.page_step(), 1);
     }
 }
