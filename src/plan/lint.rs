@@ -1,5 +1,5 @@
 use super::model::parse_frontmatter;
-use super::tasks::read_task_files;
+use super::store::read_task_files;
 use crate as lib;
 
 pub fn validate_all(root: &std::path::Path, warnings: &mut Vec<String>) -> Result<(), Vec<String>> {

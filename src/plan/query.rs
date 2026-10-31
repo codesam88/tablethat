@@ -1,6 +1,6 @@
 use super::model::{LoadedTask, Task, parse_frontmatter};
 #[cfg(test)]
-use super::tasks::read_task_files;
+use super::store::read_task_files;
 #[cfg(test)]
 use crate as lib;
 use std::path::PathBuf;

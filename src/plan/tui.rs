@@ -209,7 +209,7 @@ pub fn run_tui(
     search_query: Option<&str>,
 ) {
     let tasks_dir = root.join(".plan");
-    let entries = crate::plan::tasks::read_task_files(&tasks_dir).unwrap_or_default();
+    let entries = crate::plan::store::read_task_files(&tasks_dir).unwrap_or_default();
     let exclude: Vec<String> = if cfg.hide_done {
         vec!["done".into()]
     } else {
