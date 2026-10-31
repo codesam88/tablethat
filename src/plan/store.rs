@@ -266,8 +266,25 @@ pub fn create_task(
         return Err(format!("task already exists: {}", path.display()));
     }
 
+    // Frontmatter fields are single-line by design; a newline would inject
+    // extra keys. Quotable specials (e.g. `a: b`) are handled by yaml_quote.
+    for (name, value) in [
+        ("status", status),
+        ("type", task_type),
+        ("priority", priority),
+        ("area", area),
+    ] {
+        if value.contains(['\n', '\r']) {
+            return Err(format!("invalid {name}: values must be a single line"));
+        }
+    }
+
     let content = format!(
-        "---\nstatus: {status}\ntype: {task_type}\npriority: {priority}\narea: {area}\n---\n\n## Notes\n\n"
+        "---\nstatus: {}\ntype: {}\npriority: {}\narea: {}\n---\n\n## Notes\n\n",
+        super::model::yaml_quote(status),
+        super::model::yaml_quote(task_type),
+        super::model::yaml_quote(priority),
+        super::model::yaml_quote(area)
     );
 
     std::fs::write(&path, &content)
@@ -392,5 +409,39 @@ mod tests {
         let path = create_task(root, "pathed", "open", "bug", "high", "").expect("created");
         assert_eq!(path, root.join(".plan/pathed.md"));
         assert!(path.is_file());
+    }
+
+    #[test]
+    fn create_task_rejects_newline_field_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join(".plan")).unwrap();
+        for bad in ["a\nb: c", "a\rb", "trailing\n"] {
+            assert!(
+                create_task(root, "inj-test", "open", "bug", "high", bad).is_err(),
+                "area {bad:?} must be rejected"
+            );
+        }
+        assert!(
+            !root.join(".plan/inj-test.md").exists(),
+            "rejected create must not write"
+        );
+    }
+
+    #[test]
+    fn create_task_quotes_yaml_special_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join(".plan")).unwrap();
+        create_task(root, "quoted", "open", "bug", "high", "a: b").expect("created");
+        let text = std::fs::read_to_string(root.join(".plan/quoted.md")).unwrap();
+        assert!(
+            text.contains("area: \"a: b\""),
+            "special value must be quoted: {text:?}"
+        );
+        // Round-trip: the quoted value parses back to itself.
+        let (fm, _) = crate::plan::model::parse_frontmatter(&text).unwrap();
+        let v: serde_json::Value = serde_saphyr::from_str(&fm).unwrap();
+        assert_eq!(v["area"], "a: b");
     }
 }

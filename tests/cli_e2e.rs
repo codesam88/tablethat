@@ -225,6 +225,15 @@ fn format_is_idempotent_and_orders_fields() {
 }
 
 #[test]
+fn add_rejects_newline_field_values() {
+    let r = Root::new();
+    assert!(r.run(r.plan().arg("init")).status.success());
+    let out = r.run(r.plan().args(["add", "inj"]).arg("--area").arg("a\nb: c"));
+    assert!(!out.status.success(), "newline value must fail");
+    assert!(!r.task_path("inj").exists());
+}
+
+#[test]
 fn delete_removes_task_and_fails_when_missing() {
     let r = Root::new();
     assert!(r.run(r.plan().arg("init")).status.success());

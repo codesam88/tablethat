@@ -13,8 +13,8 @@ then ride-alongs.
 
 ## Steps
 
-- [ ] Step 0: `cargo update`, verify suite + deny/audit, commit lockfile.
-- [ ] Step 1: frontmatter injection — validate values in `create_task`,
+- [x] Step 0: `cargo update`, verify suite + deny/audit, commit lockfile.
+- [x] Step 1: frontmatter injection — validate values in `create_task`,
   YAML-quote strings in `value_to_yaml_str` (TDD).
 - [ ] Step 2: gloss highlight Unicode panic — char-aware offsets (TDD).
 - [ ] Step 3: release gates — test/clippy/audit before publish.
@@ -30,3 +30,14 @@ then ride-alongs.
 
 - `just precommit` green, `cargo deny check` green, `cargo doc` zero
   warnings, e2e suite green. Each step committed separately.
+
+## Progress (newest first)
+
+- 2026-10-31: Step 1 DONE (TDD: 6 contract tests RED, GREEN first pass).
+  `model::yaml_quote` (bare words pass through, specials double-quoted,
+  empty stays bare); `create_task` rejects `\n`/`\r` values; `Null` arm
+  keeps `area: ` stable (pre-existing empty->`null` wart fixed along the
+  way). Canonical files byte-stable by construction (probe reverted).
+  117 green.
+- 2026-10-31: Step 0 DONE. `cargo update` moved lru 0.18.0->0.18.5,
+  clearing RUSTSEC-2026-0253 — audit silent, watch closed. 110 green.

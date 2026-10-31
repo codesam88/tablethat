@@ -35,6 +35,39 @@ pub struct LoadedTask {
     pub task: Task,
 }
 
+/// Quote a frontmatter scalar for YAML emission. Bare words pass through
+/// unchanged (keeping canonical files byte-stable); anything YAML-special
+/// (`: `, ` #`, quotes, backslashes, leading/trailing space, leading
+/// indicators) is double-quoted with `\`/`"`/`newline` escapes. Empty
+/// stays bare (`area: ` parses as null, coerced to `""` by the shim).
+pub(crate) fn yaml_quote(s: &str) -> String {
+    let needs = s.contains(": ")
+        || s.contains(" #")
+        || s.contains(['"', '\\', '\t', '\n', '\r'])
+        || s.starts_with(' ')
+        || s.ends_with(' ')
+        || s.starts_with([
+            '-', '?', ':', ',', '[', ']', '{', '}', '&', '*', '!', '|', '>', '\'', '%', '@', '#',
+        ]);
+    if !needs {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Split `---`-delimited frontmatter from a task file. Returns the YAML
 /// block and the 1-based line where it starts (for WARNING locations).
 pub fn parse_frontmatter(content: &str) -> Result<(String, usize), String> {
@@ -128,5 +161,19 @@ mod tests {
         let md = "---\nstatus: open\n---\n\n\n\n";
         let (fm, _) = parse_frontmatter(md).unwrap();
         assert_eq!(fm, "status: open");
+    }
+
+    #[test]
+    fn yaml_quote_leaves_simple_values_bare() {
+        assert_eq!(yaml_quote("open"), "open");
+        assert_eq!(yaml_quote("in-progress"), "in-progress");
+        assert_eq!(yaml_quote(""), "");
+    }
+
+    #[test]
+    fn yaml_quote_quotes_special_values() {
+        assert_eq!(yaml_quote("a: b"), "\"a: b\"");
+        assert_eq!(yaml_quote("#hash"), "\"#hash\"");
+        assert_eq!(yaml_quote("a\"b"), "\"a\\\"b\"");
     }
 }

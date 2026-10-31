@@ -57,7 +57,9 @@ fn normalize_frontmatter(content: &str) -> Result<String, String> {
 
 fn value_to_yaml_str(val: &serde_json::Value) -> String {
     match val {
-        serde_json::Value::String(s) => s.clone(),
+        // Null stays bare: `area: ` round-trips instead of becoming `null`.
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(s) => super::model::yaml_quote(s),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
         _ => serde_saphyr::to_string(val)
@@ -145,6 +147,33 @@ pub fn normalize_all(root: &std::path::Path) -> Result<usize, Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_round_trips_quoted_special_values() {
+        let input = "---\nstatus: open\ntype: bug\npriority: high\narea: \"a: b\"\n---\n\nbody\n";
+        let output = normalize_frontmatter(input).unwrap();
+        assert!(
+            output.contains("area: \"a: b\""),
+            "quoted value must survive: {output:?}"
+        );
+        // Fixpoint: formatting twice changes nothing.
+        assert_eq!(normalize_frontmatter(&output).unwrap(), output);
+    }
+
+    #[test]
+    fn normalize_preserves_empty_values() {
+        // `area: ` parses as null; it must stay bare, not become `null`.
+        let input = "---\nstatus: open\ntype: bug\npriority: high\narea: \n---\n\nbody\n";
+        let output = normalize_frontmatter(input).unwrap();
+        assert!(
+            output.contains("area: \n"),
+            "empty must stay bare: {output:?}"
+        );
+        assert!(
+            !output.contains("null"),
+            "null must not leak in: {output:?}"
+        );
+    }
 
     #[test]
     fn normalize_reorders_fields_canonically() {
