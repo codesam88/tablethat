@@ -20,6 +20,11 @@ allow = [
 ]
 
 [bans]
+# Duplicate versions are allowed: the ratatui ecosystem pulls parallel
+# major versions transitively (crossterm 0.28/0.29, rustix 0.38/1.x,
+# linux-raw-sys) that we cannot unify from here. Verified 2026-10-31:
+# removing this surfaces only those warnings, no direct-dep duplicates.
+# Revisit if a *direct* dependency ever duplicates.
 multiple-versions = "allow"
 wildcards = "deny"
 
