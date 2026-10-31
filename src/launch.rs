@@ -11,6 +11,12 @@ use std::path::{Path, PathBuf};
 /// a shell. Handles quoting/escaping (`"my editor" --wait` keeps the embedded
 /// space). Falls back to `("vi", [])` when the raw string is empty,
 /// whitespace-only, or fails to parse.
+///
+/// ```
+/// # use tablethat_lib::launch::split_editor_cmd;
+/// assert_eq!(split_editor_cmd("code --wait"), ("code".into(), vec!["--wait".into()]));
+/// assert_eq!(split_editor_cmd(""), ("vi".into(), Vec::new()));
+/// ```
 pub fn split_editor_cmd(raw: &str) -> (String, Vec<String>) {
     match shell_words::split(raw) {
         Ok(mut parts) if !parts.is_empty() => {

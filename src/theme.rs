@@ -2,15 +2,24 @@ use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Markdown rendering theme (colors + emphasis modifiers).
+/// Loaded from `themes/*.toml`; see [`ThemeFile`].
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ThemeConfig {
+    /// Level-1 heading color (rendered bold + underlined).
     pub h1_color: Color,
+    /// Level-2 heading color (rendered underlined).
     pub h2_color: Color,
+    /// Level-3+ heading color.
     pub h3_color: Color,
+    /// Inline-code color.
     pub code_color: Color,
+    /// Fenced-code-block color.
     #[serde(default = "default_code_block_color")]
     pub code_block_color: Color,
+    /// Style for strong text: `bold`, `dim`, `italic`, `underlined`.
     pub bold_style: String,
+    /// Style for emphasis text (same vocabulary; default `underlined`).
     pub emphasis_style: String,
 }
 
@@ -35,7 +44,9 @@ impl Default for ThemeConfig {
 /// A theme loaded from a TOML file.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ThemeFile {
+    /// Theme name (selectable via `--theme`).
     pub name: String,
+    /// Rendering theme.
     pub theme: ThemeConfig,
 }
 

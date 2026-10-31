@@ -10,23 +10,33 @@ where
     Option::<String>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
 }
 
+/// Task frontmatter: the filename (sans `.md`) is the unique key.
+/// YAML nulls coerce to `""` (legacy `serde_yaml` leniency, kept).
 #[derive(Deserialize, Debug)]
 pub struct Task {
-    #[serde(deserialize_with = "null_to_empty_string")]
+    /// Lifecycle state (`idea`, `backlog`, `open`, `in-progress`, `blocked`, `done`).
     pub status: String,
+    /// Kind of work (`type` in YAML).
     #[serde(rename = "type", deserialize_with = "null_to_empty_string")]
     pub task_type: String,
+    /// Urgency (`high`, `medium`, `low`).
     #[serde(deserialize_with = "null_to_empty_string")]
     pub priority: String,
+    /// Optional grouping label; defaults to empty.
     #[serde(default, deserialize_with = "null_to_empty_string")]
     pub area: String,
 }
 
+/// A task paired with its filename slug.
 pub struct LoadedTask {
+    /// Filename without `.md`.
     pub slug: String,
+    /// Parsed frontmatter.
     pub task: Task,
 }
 
+/// Split `---`-delimited frontmatter from a task file. Returns the YAML
+/// block and the 1-based line where it starts (for WARNING locations).
 pub fn parse_frontmatter(content: &str) -> Result<(String, usize), String> {
     let mut lines = content.lines().enumerate();
 

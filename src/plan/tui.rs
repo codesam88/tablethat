@@ -16,11 +16,16 @@ use lib::markdown::{render_markdown, theme_from_cfg};
 
 const FIELD_COUNT: usize = 4; // type, priority, area, slug
 
+/// Post-render action requested by the event loop.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Action {
+    /// Nothing to do.
     None,
+    /// Quit the browser.
     Quit,
+    /// Suspend TUI and open the selected task in `$EDITOR`.
     OpenEditor,
+    /// Suspend TUI and view the selected task in `gloss`.
     OpenGloss,
 }
 
@@ -199,6 +204,8 @@ impl<'a> App<'a> {
     }
 }
 
+/// Run the interactive kanban browser; returns on quit or empty result.
+/// `OpenEditor`/`OpenGloss` suspend the TUI, run the child, then resume.
 pub fn run_tui(
     root: &Path,
     cfg: &Config,

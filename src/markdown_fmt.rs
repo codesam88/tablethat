@@ -1,5 +1,14 @@
 use comrak::Options;
 
+/// Rewrite markdown to canonical CommonMark: reflow to `width`, fenced
+/// code blocks, aligned tables, no trailing whitespace. Idempotent —
+/// formatting twice is a fixpoint (pinned by `formatter_is_idempotent`).
+///
+/// ```
+/// # use tablethat_lib::markdown_fmt::format_commonmark;
+/// let out = format_commonmark("# Title\n", 80);
+/// assert!(out.contains("# Title"));
+/// ```
 pub fn format_commonmark(text: &str, width: usize) -> String {
     let mut opts = Options::default();
     opts.extension.table = true;

@@ -6,16 +6,26 @@ use ratatui::{
     text::{Line, Span},
 };
 
+/// Resolved styles for each markdown element, derived from [`ThemeConfig`].
 pub struct MarkdownTheme {
+    /// H1 headings (bold + underlined).
     pub h1: Style,
+    /// H2 headings (underlined).
     pub h2: Style,
+    /// H3+ headings.
     pub h3: Style,
+    /// Strong text (modifier from `bold_style`).
     pub bold: Style,
+    /// Emphasis text (modifier from `emphasis_style`).
     pub dim: Style,
+    /// Inline code.
     pub code: Style,
+    /// Fenced code blocks (never wrapped).
     pub code_block: Style,
 }
 
+/// Build render styles from config; unknown style names fall back to
+/// bold (strong) / underlined (emphasis).
 pub fn theme_from_cfg(cfg: &ThemeConfig) -> MarkdownTheme {
     let bold_mod = match cfg.bold_style.as_str() {
         "bold" => Modifier::BOLD,
@@ -47,6 +57,8 @@ pub fn theme_from_cfg(cfg: &ThemeConfig) -> MarkdownTheme {
     }
 }
 
+/// Drop a leading `---` YAML frontmatter block; pass text through unchanged.
+/// Used so task metadata never renders as content.
 pub fn strip_frontmatter(text: &str) -> &str {
     if let Some(rest) = text.trim_start().strip_prefix("---")
         && let Some(end) = rest.find("---")
@@ -76,6 +88,11 @@ fn wrap_lines(text: &str, max: usize) -> Vec<String> {
     out
 }
 
+/// Reflow styled spans to `max` columns, preserving style boundaries.
+/// Break only at spaces or the `](` link seam (`]` stays left, `(` right);
+/// bracket groups (`(word)`, `[word]`, nested) never split — depth is tracked
+/// across spans so `(` from one span still guards `)` from another.
+/// Full rule table lives in the test module below ("WORD WRAP RULES").
 fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
     // Strategy: process spans character by character, accumulating a "pending" buffer.
     // The pending buffer holds (text, style) pieces that haven't been committed to a line yet.
@@ -574,6 +591,20 @@ fn render_node(
     }
 }
 
+/// Render markdown to styled lines: strips frontmatter, parses with comrak
+/// (tables, tasklists, strikethrough, autolink), wraps paragraphs to `wrap`
+/// columns. Headings render on one line; code blocks and tables are never
+/// word-wrapped. See `wrap_spans` for bracket grouping rules.
+///
+/// ```
+/// # use tablethat_lib::{ThemeConfig, markdown::{render_markdown, theme_from_cfg}};
+/// let th = theme_from_cfg(&ThemeConfig::default());
+/// let lines = render_markdown(&th, "# Hello\n", 80);
+/// let text: String = lines.iter()
+///     .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+///     .collect();
+/// assert!(text.contains("# Hello"));
+/// ```
 pub fn render_markdown(th: &MarkdownTheme, text: &str, wrap: usize) -> Vec<Line<'static>> {
     let body = strip_frontmatter(text);
     let arena = Arena::new();

@@ -5,6 +5,8 @@ use crate::{ColorsConfig, Config};
 use std::io::Write;
 use termcolor::{ColorChoice, ColorSpec, StandardStream, WriteColor};
 
+/// Validate, filter, sort, and print the task list (table or kanban).
+/// Validation diagnostics print to stderr; an unreadable task dir exits 1.
 #[allow(clippy::too_many_arguments)]
 pub fn list_tasks(
     root: &std::path::Path,

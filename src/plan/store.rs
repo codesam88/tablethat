@@ -1,6 +1,7 @@
 use crate::launch;
 use std::path::PathBuf;
 
+/// List `.md` task files in a directory, sorted, excluding `.TEMPLATE.md`.
 pub fn read_task_files(tasks_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
     match std::fs::read_dir(tasks_dir) {
         Ok(rd) => {
@@ -166,6 +167,8 @@ pub fn resolve_single_slug(root: &std::path::Path, query: &str) -> Option<PathBu
     }
 }
 
+/// Create `.plan/` with the schema and template (from config/data dirs,
+/// else embedded defaults). No-op with a notice if it already exists.
 pub fn init_plan(root: &std::path::Path) {
     let plan_dir = root.join(".plan");
     if plan_dir.exists() {
@@ -272,6 +275,8 @@ pub fn create_task(
     Ok(path)
 }
 
+/// Render a task file through the `gloss` binary. `Err` on spawn failure
+/// or nonzero exit (message carries the exit code).
 pub fn open_task(path: &std::path::Path, width: usize) -> Result<(), String> {
     let gloss = launch::resolve_gloss_program();
     match std::process::Command::new(&gloss)
@@ -286,6 +291,7 @@ pub fn open_task(path: &std::path::Path, width: usize) -> Result<(), String> {
     }
 }
 
+/// Delete a task file. Returns the removed path.
 pub fn delete_task(path: &std::path::Path) -> Result<PathBuf, String> {
     std::fs::remove_file(path).map_err(|e| format!("{}: cannot delete — {e}", path.display()))?;
     Ok(path.to_path_buf())

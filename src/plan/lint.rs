@@ -2,6 +2,11 @@ use super::model::parse_frontmatter;
 use super::store::read_task_files;
 use crate as lib;
 
+/// Validate every task file against the resolved schema.
+///
+/// Diagnostics are returned, never printed: `Ok(())` means clean,
+/// `Err` carries one line per failure. Non-fatal notes (unknown keys,
+/// empty tree) accumulate in `warnings` either way.
 pub fn validate_all(root: &std::path::Path, warnings: &mut Vec<String>) -> Result<(), Vec<String>> {
     let tasks_dir = root.join(lib::PLAN_DIR);
 

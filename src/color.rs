@@ -33,6 +33,7 @@ fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
     16 + 36 * ri + 6 * gi + bi
 }
 
+/// Status name to display color; unknown statuses fall back to white.
 pub fn status_color(status: &str, colors: &ColorsConfig) -> ratatui::style::Color {
     match status {
         "in-progress" => colors.status.in_progress,
@@ -45,6 +46,7 @@ pub fn status_color(status: &str, colors: &ColorsConfig) -> ratatui::style::Colo
     }
 }
 
+/// Priority name to display color; unknown priorities fall back to white.
 pub fn priority_color(priority: &str, colors: &ColorsConfig) -> ratatui::style::Color {
     match priority {
         "high" => colors.priority.high,

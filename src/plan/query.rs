@@ -5,6 +5,9 @@ use super::store::read_task_files;
 use crate as lib;
 use std::path::PathBuf;
 
+/// Load tasks from `entries`, skipping unreadable/unparseable files.
+/// Filters are conjunctive exact matches; `search_query` matches slug or
+/// body case-insensitively; `statuses_to_exclude` drops states (e.g. `done`).
 pub fn load_and_filter_tasks(
     entries: &[PathBuf],
     status_filter: Option<&str>,
@@ -95,6 +98,8 @@ pub fn load_and_filter_tasks(
     tasks
 }
 
+/// Order two tasks by `sort_keys` in sequence (default `priority`, `slug`).
+/// Unknown keys compare equal (stable, no-op).
 pub fn cmp_tasks(
     a: &LoadedTask,
     b: &LoadedTask,
@@ -116,6 +121,8 @@ pub fn cmp_tasks(
     std::cmp::Ordering::Equal
 }
 
+/// Order by one key: `status` follows kanban order, `priority` ranks
+/// high < medium < low < unknown, the rest compare lexicographically.
 pub fn cmp_by_key(
     a: &LoadedTask,
     b: &LoadedTask,

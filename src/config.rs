@@ -6,41 +6,68 @@ use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Layered app configuration: defaults < config file < env vars < CLI.
+/// See [`Config::try_load`] for precedence and failure contract.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
+    /// Repo root containing `.plan` (CLI `--root`; else auto-detected).
     pub root: Option<PathBuf>,
+    /// Editor for `open` (CLI/config; else `$EDITOR`, else `vi`).
     pub editor: Option<String>,
+    /// Theme lookup dir (else `./themes/`, then platform config dir).
     pub themes_dir: Option<PathBuf>,
+    /// View for bare `plan`: `kanban` or `list`.
     pub default_view: String,
+    /// Sort keys used when none are given (`priority`, `slug`).
     pub default_sort: Vec<String>,
+    /// Hide `done` tasks unless `--show-done`.
     pub hide_done: bool,
+    /// Column order for kanban display.
     pub kanban_order: Vec<String>,
+    /// Render width for interactive TUI views.
     pub tui_width: usize,
+    /// Render width for pager/`open` views.
     pub pager_width: usize,
+    /// Render width for piped (filter) output.
     pub width: usize,
+    /// Status/priority colors for kanban display.
     pub colors: ColorsConfig,
 }
 
+/// Kanban color groups.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ColorsConfig {
+    /// Per-status colors.
     pub status: StatusColors,
+    /// Per-priority colors.
     pub priority: PriorityColors,
 }
 
+/// Color per task status; unknown statuses render white.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StatusColors {
+    /// `in-progress` tasks.
     pub in_progress: Color,
+    /// `open` tasks.
     pub open: Color,
+    /// `blocked` tasks.
     pub blocked: Color,
+    /// `backlog` tasks.
     pub backlog: Color,
+    /// `idea` tasks.
     pub idea: Color,
+    /// `done` tasks.
     pub done: Color,
 }
 
+/// Color per priority; unknown priorities render white.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PriorityColors {
+    /// `high` priority.
     pub high: Color,
+    /// `medium` priority.
     pub medium: Color,
+    /// `low` priority.
     pub low: Color,
 }
 
@@ -190,7 +217,7 @@ impl Config {
 }
 
 /// Resolve a file by checking project-local, then config dir, then data dir.
-/// Returns the first path that exists, or None.
+/// Returns the first path that exists, or `None`.
 pub fn resolve_file(
     root: &Path,
     plan_dir: &str,
@@ -223,6 +250,8 @@ pub fn resolve_file(
     None
 }
 
+/// Nearest ancestor (or self) containing a `.plan/` dir; falls back to cwd.
+/// Defines the workspace for task lookup and local config discovery.
 pub fn workspace_root() -> PathBuf {
     let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut candidate = Some(dir.as_path());
