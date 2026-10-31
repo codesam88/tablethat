@@ -21,6 +21,8 @@ pub mod markdown;
 pub mod markdown_fmt;
 /// Task management (model/query/lint/display/store/format/TUI).
 pub mod plan;
+/// Case-insensitive text search with source-safe byte ranges.
+pub mod text;
 /// TOML theme discovery and loading.
 pub mod theme;
 
