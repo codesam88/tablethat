@@ -315,9 +315,13 @@ pub fn run_tui(
                 Action::OpenEditor => {
                     if let Some((_slug, path)) = app.current_task_path() {
                         let (editor, editor_args) = lib::launch::editor_command();
+                        // Preview knows its scroll line; browse opens at top.
+                        let line = (app.mode == Mode::Preview).then_some(app.preview_scroll + 1);
+                        let line_flag = lib::launch::editor_line_flag(&editor, line);
                         ratatui::restore();
                         let status = std::process::Command::new(&editor)
                             .args(&editor_args)
+                            .args(&line_flag)
                             .arg(path)
                             .status();
                         if let Ok(s) = status

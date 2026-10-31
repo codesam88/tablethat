@@ -34,6 +34,23 @@ pub fn editor_command() -> (String, Vec<String>) {
     split_editor_cmd(&raw)
 }
 
+/// Position flag for `$EDITOR` invocation: vi/emacs-family editors take
+/// `+{line}` (matched on the program basename); all others take no
+/// position argument. `None` (position unknown) yields no flag.
+pub fn editor_line_flag(program: &str, line: Option<usize>) -> Vec<String> {
+    let line = match line {
+        Some(n) => n,
+        None => return Vec::new(),
+    };
+    let base = program.rsplit('/').next().unwrap_or(program);
+    match base {
+        "vi" | "vim" | "nvim" | "view" | "emacs" | "emacsclient" | "nano" => {
+            vec![format!("+{line}")]
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Resolve the `gloss` binary: prefer a sibling of the currently running
 /// executable (`plan` and `gloss` ship in the same directory via
 /// `cargo install` and in `target/*/debug|release`), otherwise fall back to
@@ -129,5 +146,38 @@ mod tests {
     fn resolve_gloss_falls_back_to_path_when_exe_dir_unknown() {
         let resolved = resolve_gloss_program_in(None);
         assert_eq!(resolved, std::ffi::OsString::from("gloss"));
+    }
+}
+
+#[cfg(test)]
+mod line_flag_tests {
+    use super::*;
+
+    #[test]
+    fn vi_family_takes_plus_line() {
+        assert_eq!(editor_line_flag("vi", Some(42)), vec!["+42"]);
+        assert_eq!(editor_line_flag("nvim", Some(1)), vec!["+1"]);
+    }
+
+    #[test]
+    fn emacs_family_takes_plus_line() {
+        assert_eq!(editor_line_flag("emacs", Some(7)), vec!["+7"]);
+        assert_eq!(editor_line_flag("emacsclient", Some(3)), vec!["+3"]);
+    }
+
+    #[test]
+    fn other_editors_take_no_flag() {
+        assert!(editor_line_flag("code", Some(5)).is_empty());
+        assert!(editor_line_flag("hx", Some(5)).is_empty());
+    }
+
+    #[test]
+    fn no_line_means_no_flag() {
+        assert!(editor_line_flag("vim", None).is_empty());
+    }
+
+    #[test]
+    fn program_path_uses_basename() {
+        assert_eq!(editor_line_flag("/usr/bin/nvim", Some(3)), vec!["+3"]);
     }
 }

@@ -331,9 +331,11 @@ fn run_tui(app: &mut App, cfg: &lib::Config) {
             Ok(Action::OpenEditor) => {
                 if let Some(path) = app.current_file().map(|p| p.to_path_buf()) {
                     let (editor, editor_args) = lib::launch::editor_command();
+                    let line_flag = lib::launch::editor_line_flag(&editor, Some(app.scroll + 1));
                     ratatui::restore();
                     let _ = std::process::Command::new(&editor)
                         .args(&editor_args)
+                        .args(&line_flag)
                         .arg(&path)
                         .status();
                     app.load_selected();
