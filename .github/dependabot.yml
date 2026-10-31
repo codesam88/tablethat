@@ -1,0 +1,18 @@
+# Weekly dependency updates (cargo + GitHub Actions).
+# Keeps the daily audit workflow actionable: findings arrive as PRs.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
