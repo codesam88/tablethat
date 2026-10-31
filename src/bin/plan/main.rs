@@ -2,11 +2,6 @@ use clap::Parser;
 use std::path::PathBuf;
 use tablethat_lib as lib;
 
-#[path = "../../plan/tasks.rs"]
-mod tasks;
-#[path = "../../plan/tui.rs"]
-mod tui;
-
 #[derive(Parser)]
 #[command(
     name = "plan",
@@ -195,7 +190,7 @@ fn main() {
             search,
             sort,
         }) => {
-            tasks::list_tasks(
+            tablethat_lib::plan::tasks::list_tasks(
                 &root,
                 &cfg,
                 status.as_deref(),
@@ -215,7 +210,7 @@ fn main() {
             search,
             sort,
         }) => {
-            tasks::list_tasks(
+            tablethat_lib::plan::tasks::list_tasks(
                 &root,
                 &cfg,
                 status.as_deref(),
@@ -233,7 +228,9 @@ fn main() {
             type_,
             priority,
             area,
-        }) => match tasks::create_task(&root, &slug, &status, &type_, &priority, &area) {
+        }) => match tablethat_lib::plan::tasks::create_task(
+            &root, &slug, &status, &type_, &priority, &area,
+        ) {
             Ok(path) => {
                 eprintln!("created {}", path.display());
             }
@@ -243,14 +240,14 @@ fn main() {
             }
         },
         Some(Commands::Open { slug }) => {
-            let path = match tasks::resolve_single_slug(&root, &slug) {
+            let path = match tablethat_lib::plan::tasks::resolve_single_slug(&root, &slug) {
                 Some(p) => p,
                 None => {
                     eprintln!("no task matching '{slug}'");
                     std::process::exit(1);
                 }
             };
-            match tasks::open_task(&path, cfg.pager_width) {
+            match tablethat_lib::plan::tasks::open_task(&path, cfg.pager_width) {
                 Ok(()) => {}
                 Err(e) => {
                     eprintln!("{e}");
@@ -259,14 +256,14 @@ fn main() {
             }
         }
         Some(Commands::Delete { slug }) => {
-            let path = match tasks::resolve_single_slug(&root, &slug) {
+            let path = match tablethat_lib::plan::tasks::resolve_single_slug(&root, &slug) {
                 Some(p) => p,
                 None => {
                     eprintln!("no task matching '{slug}'");
                     std::process::exit(1);
                 }
             };
-            match tasks::delete_task(&path) {
+            match tablethat_lib::plan::tasks::delete_task(&path) {
                 Ok(deleted) => {
                     eprintln!("deleted {}", deleted.display());
                 }
@@ -283,7 +280,7 @@ fn main() {
             area,
             search,
         }) => {
-            tui::run_tui(
+            tablethat_lib::plan::tui::run_tui(
                 &root,
                 &cfg,
                 status.as_deref(),
@@ -294,11 +291,11 @@ fn main() {
             );
         }
         Some(Commands::Init) => {
-            tasks::init_plan(&root);
+            tablethat_lib::plan::tasks::init_plan(&root);
         }
         Some(Commands::Lint) => {
             let mut warnings = Vec::new();
-            match tasks::validate_all(&root, &mut warnings) {
+            match tablethat_lib::plan::tasks::validate_all(&root, &mut warnings) {
                 Ok(()) => {}
                 Err(errors) => {
                     for e in &errors {
@@ -326,7 +323,7 @@ fn main() {
                         .collect();
                     let mut failed = false;
                     for entry in &entries {
-                        match tasks::format_file(entry, 120) {
+                        match tablethat_lib::plan::tasks::format_file(entry, 120) {
                             Ok(true) => eprintln!("formatted {}", entry.display()),
                             Ok(false) => {}
                             Err(e) => {
@@ -337,7 +334,7 @@ fn main() {
                     }
                     std::process::exit(if failed { 1 } else { 0 });
                 } else if p.is_file() {
-                    match tasks::format_file(&p, 120) {
+                    match tablethat_lib::plan::tasks::format_file(&p, 120) {
                         Ok(true) => eprintln!("formatted {}", p.display()),
                         Ok(false) => {}
                         Err(e) => {
@@ -350,7 +347,7 @@ fn main() {
                     std::process::exit(1);
                 }
             }
-            None => match tasks::normalize_all(&root) {
+            None => match tablethat_lib::plan::tasks::normalize_all(&root) {
                 Ok(0) => eprintln!("all files already canonical"),
                 Ok(n) => eprintln!("fixed {n} file(s)"),
                 Err(errors) => {
@@ -365,10 +362,30 @@ fn main() {
             // Default view from config
             match cfg.default_view.as_str() {
                 "kanban" => {
-                    tasks::list_tasks(&root, &cfg, None, None, None, None, None, true, &[]);
+                    tablethat_lib::plan::tasks::list_tasks(
+                        &root,
+                        &cfg,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        true,
+                        &[],
+                    );
                 }
                 _ => {
-                    tasks::list_tasks(&root, &cfg, None, None, None, None, None, false, &[]);
+                    tablethat_lib::plan::tasks::list_tasks(
+                        &root,
+                        &cfg,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        false,
+                        &[],
+                    );
                 }
             }
         }

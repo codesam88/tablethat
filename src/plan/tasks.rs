@@ -1,6 +1,6 @@
+use crate::{self as lib, ColorsConfig, Config};
 use serde::Deserialize;
 use std::path::PathBuf;
-use tablethat_lib::{self as lib, ColorsConfig, Config};
 
 /// `serde_yaml` coerced YAML null to `""` for `String` fields; `serde_saphyr`
 /// rejects null for strings. Preserve the old leniency so files with empty

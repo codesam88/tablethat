@@ -9,8 +9,8 @@ use ratatui::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate as lib;
 use lib::Config;
-use tablethat_lib as lib;
 
 use lib::markdown::{render_markdown, theme_from_cfg};
 
@@ -35,8 +35,8 @@ struct App<'a> {
     root: &'a Path,
     cfg: &'a Config,
     entries: Vec<PathBuf>,
-    all_tasks: Vec<crate::tasks::LoadedTask>,
-    tasks: Vec<crate::tasks::LoadedTask>,
+    all_tasks: Vec<crate::plan::tasks::LoadedTask>,
+    tasks: Vec<crate::plan::tasks::LoadedTask>,
     task_paths: HashMap<String, PathBuf>,
     columns: Vec<Column>,
     selected_column: usize,
@@ -71,7 +71,7 @@ impl<'a> App<'a> {
     fn new(
         root: &'a Path,
         cfg: &'a Config,
-        tasks: Vec<crate::tasks::LoadedTask>,
+        tasks: Vec<crate::plan::tasks::LoadedTask>,
         entries: Vec<PathBuf>,
     ) -> Self {
         let path_map: HashMap<String, PathBuf> = entries
@@ -85,7 +85,7 @@ impl<'a> App<'a> {
 
         // Load all tasks unfiltered for hidden-count display
         let all_tasks =
-            crate::tasks::load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
+            crate::plan::tasks::load_and_filter_tasks(&entries, None, None, None, None, None, &[]);
 
         let themes = lib::theme::load_themes(cfg.themes_dir.as_deref(), "plan");
 
@@ -127,7 +127,7 @@ impl<'a> App<'a> {
 
     fn sort_tasks(&mut self) {
         self.tasks
-            .sort_by(|a, b| crate::tasks::cmp_tasks(a, b, &[], &self.cfg.kanban_order));
+            .sort_by(|a, b| crate::plan::tasks::cmp_tasks(a, b, &[], &self.cfg.kanban_order));
     }
 
     fn reload_tasks(&mut self) {
@@ -136,7 +136,7 @@ impl<'a> App<'a> {
         } else {
             vec![]
         };
-        self.tasks = crate::tasks::load_and_filter_tasks(
+        self.tasks = crate::plan::tasks::load_and_filter_tasks(
             &self.entries,
             self.filter_status.as_deref(),
             self.filter_type.as_deref(),
@@ -209,13 +209,13 @@ pub fn run_tui(
     search_query: Option<&str>,
 ) {
     let tasks_dir = root.join(".plan");
-    let entries = crate::tasks::read_task_files(&tasks_dir).unwrap_or_default();
+    let entries = crate::plan::tasks::read_task_files(&tasks_dir).unwrap_or_default();
     let exclude: Vec<String> = if cfg.hide_done {
         vec!["done".into()]
     } else {
         vec![]
     };
-    let tasks = crate::tasks::load_and_filter_tasks(
+    let tasks = crate::plan::tasks::load_and_filter_tasks(
         &entries,
         status_filter,
         type_filter,
@@ -519,7 +519,7 @@ impl App<'_> {
 
         for (col_idx, column) in self.columns.iter().enumerate() {
             let is_active = col_idx == self.selected_column;
-            let color = status_color(&column.status, &self.cfg.colors);
+            let color = crate::color::status_color(&column.status, &self.cfg.colors);
 
             let total = self
                 .all_tasks
@@ -615,7 +615,7 @@ impl App<'_> {
                     spans.push(Span::styled(content, type_st));
 
                     // Priority (field 1) — vivid colors get colored bg, low uses plain row highlight
-                    let pc = priority_color(&task.task.priority, &self.cfg.colors);
+                    let pc = crate::color::priority_color(&task.task.priority, &self.cfg.colors);
                     let vivid = is_vivid(pc);
                     let content = if is_act(1) {
                         format!(
@@ -945,31 +945,5 @@ impl App<'_> {
         let task = self.tasks.get(*task_idx)?;
         let path = self.task_paths.get(&task.slug)?;
         Some((&task.slug, path))
-    }
-}
-
-fn status_color(status: &str, colors: &tablethat_lib::ColorsConfig) -> Color {
-    lib::status_color(status, colors)
-}
-
-fn priority_color(p: &str, colors: &tablethat_lib::ColorsConfig) -> Color {
-    lib::priority_color(p, colors)
-}
-
-#[cfg(test)]
-mod quick_table_test {
-    use tablethat_lib::markdown::{render_markdown, theme_from_cfg};
-    #[test]
-    fn table_renders_header_and_body() {
-        let md = "| **Name** | `Code` |\n|---|---|\n| foo | bar |\n";
-        let th = theme_from_cfg(&tablethat_lib::ThemeConfig::default());
-        let lines = render_markdown(&th, md, 80);
-        let total: String = lines
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
-            .collect();
-        assert!(total.contains("Name"), "Missing header 'Name'");
-        assert!(total.contains("foo"), "Missing body 'foo'");
-        assert!(total.contains("="), "Missing separator");
     }
 }

@@ -2,11 +2,6 @@ use clap::Parser;
 use std::path::PathBuf;
 use tablethat_lib as lib;
 
-#[path = "../../gloss/filter.rs"]
-mod filter;
-#[path = "../../gloss/tui.rs"]
-mod tui;
-
 #[derive(Parser)]
 #[command(
     name = "gloss",
@@ -68,10 +63,10 @@ fn main() {
     match cli.path {
         // TUI mode: file or directory argument provided, or no arg but tty
         Some(path) if path.is_file() => {
-            tui::run_file_viewer(&path, &cfg, &themes, 0, width);
+            tablethat_lib::gloss::tui::run_file_viewer(&path, &cfg, &themes, 0, width);
         }
         Some(path) if path.is_dir() => {
-            tui::run_directory_browser(&path, &cfg, &themes, width);
+            tablethat_lib::gloss::tui::run_directory_browser(&path, &cfg, &themes, width);
         }
         Some(path) => {
             eprintln!("gloss: {}: not a file or directory", path.display());
@@ -79,7 +74,7 @@ fn main() {
         }
         // Filter mode: stdin piped
         None if !is_tty => {
-            if let Err(e) = filter::run_filter(&theme, cli.no_color, width) {
+            if let Err(e) = tablethat_lib::gloss::filter::run_filter(&theme, cli.no_color, width) {
                 eprintln!("gloss: {e}");
                 std::process::exit(1);
             }
@@ -87,7 +82,7 @@ fn main() {
         // No arg + tty: browse .md files in cwd
         None => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            tui::run_directory_browser(&cwd, &cfg, &themes, width);
+            tablethat_lib::gloss::tui::run_directory_browser(&cwd, &cfg, &themes, width);
         }
     }
 }

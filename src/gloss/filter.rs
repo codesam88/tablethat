@@ -1,6 +1,6 @@
+use crate::markdown;
+use crate::theme::ThemeFile;
 use std::io::{self, Read, Write};
-use tablethat_lib::markdown;
-use tablethat_lib::theme::ThemeFile;
 use termcolor::{ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 /// Run in filter mode: read markdown from stdin, render styled output to stdout.
@@ -71,5 +71,5 @@ fn ratatui_style_to_colorspec(style: ratatui::style::Style) -> ColorSpec {
 }
 
 fn ratatui_color_to_termcolor(c: ratatui::style::Color) -> termcolor::Color {
-    tablethat_lib::ratatui_to_termcolor(c)
+    crate::ratatui_to_termcolor(c)
 }

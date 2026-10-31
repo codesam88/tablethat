@@ -1,3 +1,4 @@
+use crate as lib;
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
@@ -10,7 +11,6 @@ use ratatui::{
     widgets::Paragraph,
 };
 use std::path::{Path, PathBuf};
-use tablethat_lib as lib;
 
 struct App {
     files: Vec<PathBuf>,
