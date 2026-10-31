@@ -20,7 +20,7 @@ then ride-alongs.
 - [x] Step 3: release gates — test/clippy/audit before publish.
 - [x] Step 4: pin action SHAs.
 - [x] Step 5: `list_tasks` returns `Result` (drop lib `exit`).
-- [ ] Step 6: slug truncation char boundary (+ helper test).
+- [x] Step 6: slug truncation char boundary (+ helper test).
 - [ ] Step 7: MSRV job runs check + smoke, not just test.
 - [ ] Step 8: fix intra-doc links (`cargo doc` clean).
 - [ ] Step 9: sorted `format <dir>` + surface `read_dir` errors (helper + test).
@@ -33,6 +33,9 @@ then ride-alongs.
 
 ## Progress (newest first)
 
+- 2026-10-31: Step 6 DONE (TDD: helper RED missing, GREEN first pass).
+  `truncate_slug` floors to char boundary, byte-identical for ASCII;
+  both call sites deduplicated through it. 3 tests, 125 green.
 - 2026-10-31: Step 5 DONE (TDD: test RED uncompilable, GREEN first pass).
   `list_tasks -> Result<(), String>`; 4 CLI arms use `?`; lib has zero
   `process::exit` left. Test uses `.plan`-as-file trick for portable

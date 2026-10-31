@@ -35,6 +35,19 @@ enum Mode {
     Preview,
 }
 
+/// Truncate a slug to display width `n`, appending … when shortened.
+/// Floors to a char boundary, so multibyte slugs never panic slicing.
+fn truncate_slug(slug: &str, n: usize) -> String {
+    if slug.len() <= n {
+        return slug.to_string();
+    }
+    let mut end = n.saturating_sub(1);
+    while !slug.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    format!("{}…", &slug[..end])
+}
+
 struct App<'a> {
     #[allow(dead_code)]
     root: &'a Path,
@@ -574,19 +587,11 @@ impl App<'_> {
                     let slen = slot(slug_w);
                     let slug = if is_act(3) {
                         let n = slen.saturating_sub(2);
-                        let s = if task.slug.len() > n {
-                            format!("{}…", &task.slug[..n.saturating_sub(1)])
-                        } else {
-                            task.slug.clone()
-                        };
+                        let s = truncate_slug(&task.slug, n);
                         format!("{:<w$}", format!("[{}]", s), w = slen)
                     } else {
                         let n = slen.saturating_sub(1);
-                        let s = if task.slug.len() > n {
-                            format!("{}…", &task.slug[..n.saturating_sub(1)])
-                        } else {
-                            task.slug.clone()
-                        };
+                        let s = truncate_slug(&task.slug, n);
                         format!("{:<w$}", format!(" {}", s), w = slen)
                     };
                     let slug_st = if is_sel && is_act(3) {
@@ -952,5 +957,31 @@ impl App<'_> {
         let task = self.tasks.get(*task_idx)?;
         let path = self.task_paths.get(&task.slug)?;
         Some((&task.slug, path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_slug_ascii_unchanged() {
+        assert_eq!(truncate_slug("my-task-123", 6), "my-ta…");
+        assert_eq!(truncate_slug("short", 10), "short");
+    }
+
+    #[test]
+    fn truncate_slug_floors_to_char_boundary() {
+        // ë/â are 2 bytes each; byte 8 lands inside â and must floor to 7.
+        assert_eq!(truncate_slug("tëst-tâsk", 9), "tëst-t…");
+    }
+
+    #[test]
+    fn truncate_slug_never_panics() {
+        let slug = "tëst-tâsk-日本語";
+        for n in 0..=(slug.len() + 2) {
+            let out = truncate_slug(slug, n);
+            assert!(out.len() <= n + "…".len());
+        }
     }
 }
