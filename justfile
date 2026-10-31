@@ -32,6 +32,10 @@ smoke:
     ./target/debug/plan --help
     @echo '# hi' | ./target/debug/gloss --width 80
 
+# cargo run passthrough: just run --bin plan -- list
+run *args:
+    cargo run --bin plan -- {{args}}
+
 # cargo build (debug)
 build:
     cargo build
