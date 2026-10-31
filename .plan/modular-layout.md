@@ -48,24 +48,24 @@ intermediate (churn on churn, settled in `9dd6d68`).
 
 ## Implementation steps
 
-- [ ] Step 1 (parent): pure renames `plan/tui_kanban.rs->plan/tui.rs`,
+- [x] Step 1 (parent): pure renames `plan/tui_kanban.rs->plan/tui.rs`,
   `gloss/tui_preview.rs->gloss/tui.rs`; update `#[path]` attrs only.
   Done: build + tests green, `git diff -M` shows renames.
-- [ ] Step 2 (worker): `lib.rs` split -> `config.rs` (Config, Colors,
+- [x] Step 2 (worker): `lib.rs` split -> `config.rs` (Config, Colors,
   try_load, workspace_root, resolve_file), `theme.rs` gains ThemeConfig,
   new `color.rs` (converters + status/priority). `lib.rs` keeps
   `pub use` re-exports so all paths work; zero edits elsewhere.
   Done: full suite green, no caller changes.
-- [ ] Step 3 (worker): re-home to lib. Add `src/plan.rs`
+- [x] Step 3 (worker): re-home to lib. Add `src/plan.rs`
   (`pub mod tasks; pub mod tui;`), `src/gloss.rs`
   (`pub mod filter; pub mod tui;`); flip `tablethat_lib::`->`crate::`
   inside moved files; bins drop `#[path]`, use `tablethat_lib::plan|gloss`.
   Delete tui dup table test + tui dup color wrappers (use `crate::color`).
   Done: suite green, no `#[path]` left.
-- [ ] Step 4a (worker): `plan/tasks.rs` -> `model.rs` (Task, shim,
+- [x] Step 4a (worker): `plan/tasks.rs` -> `model.rs` (Task, shim,
   parse_frontmatter), `query.rs` (load/filter/cmp/ord), `lint.rs`
   (validate_all + TEST_SCHEMA + its tests). Byte-identical bodies.
-- [ ] Step 4b (worker): -> `display.rs` (display fns, delete termcolor
+- [x] Step 4b (worker): -> `display.rs` (display fns, delete termcolor
   wrappers, use `crate::color`), `store.rs` (paths/resolve/init/CRUD/slug),
   `format.rs` (normalize/format fns). Byte-identical bodies.
 - [ ] Step 5 (worker): extract `markdown_fmt.rs` (format_commonmark,
@@ -83,5 +83,12 @@ intermediate (churn on churn, settled in `9dd6d68`).
 
 ## Progress (newest first)
 
+- 2026-10-31: Steps 2-4b DONE (workers, parent-reviewed each). lib.rs split
+  (config/theme/color, lib.rs now 11 lines); re-home to lib (no `#[path]`
+  left, dup test + tui wrappers deleted); tasks.rs split into
+  model/query/lint then display/store/format; tasks.rs deleted.
+  plan/ is 6 focused modules (122-390 lines). 104 tests green throughout.
+  Process note: checkbox edits were twice lost from this file around worker
+  runs — future briefs forbid workers from touching git state or .plan/.
 - 2026-10-31: Plan written; DeepSeek consult done, verdict adopted with
   parent amendments above. Starting Step 1.
