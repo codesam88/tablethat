@@ -55,3 +55,13 @@ area:
 - need a real test harness for markdown rendering
 
 - for supported editors, launch editor with same/current cursor position
+
+## Progress (newest first)
+
+- 2026-10-31 (tui-tuneups batch): DONE — gloss paging follows viewport;
+  browse PgUp/PgDn home/end with wrap, Up/Down wrap around; Esc debounce
+  (`Press Esc again`, 2s); browse `/` filter-as-you-type with slug
+  highlight; editor opens at cursor line (vi/emacs `+N`); browse columns
+  attention-ordered; markdown render harness (`tests/gloss_render.rs`).
+  Untouched: reversed list default, add dialog, configurable keys,
+  multi-line table cells, search history, subtler borders.
