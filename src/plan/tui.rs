@@ -878,6 +878,8 @@ impl App<'_> {
                     self.selected_column -= 1;
                     let col = &self.columns[self.selected_column];
                     self.selected_task = col.task_indices.len().saturating_sub(1);
+                } else {
+                    self.goto_last();
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -887,6 +889,22 @@ impl App<'_> {
                 } else if self.selected_column + 1 < self.columns.len() {
                     self.selected_column += 1;
                     self.selected_task = 0;
+                } else {
+                    self.goto_first();
+                }
+            }
+            KeyCode::PageUp => {
+                if self.is_first() {
+                    self.goto_last();
+                } else {
+                    self.goto_first();
+                }
+            }
+            KeyCode::PageDown => {
+                if self.is_last() {
+                    self.goto_first();
+                } else {
+                    self.goto_last();
                 }
             }
             KeyCode::Left | KeyCode::Char('h') => {
@@ -905,6 +923,34 @@ impl App<'_> {
             }
             _ => {}
         }
+    }
+
+    fn is_first(&self) -> bool {
+        self.selected_column == 0 && self.selected_task == 0
+    }
+
+    fn is_last(&self) -> bool {
+        match self.columns.get(self.selected_column) {
+            Some(col) => {
+                self.selected_column + 1 >= self.columns.len()
+                    && self.selected_task + 1 >= col.task_indices.len()
+            }
+            None => true,
+        }
+    }
+
+    fn goto_first(&mut self) {
+        self.selected_column = 0;
+        self.selected_task = 0;
+    }
+
+    fn goto_last(&mut self) {
+        self.selected_column = self.columns.len().saturating_sub(1);
+        self.selected_task = self
+            .columns
+            .last()
+            .map(|c| c.task_indices.len().saturating_sub(1))
+            .unwrap_or(0);
     }
 
     fn run_preview_search(&mut self) {
@@ -1035,5 +1081,72 @@ mod attention_tests {
         let order = vec!["zzz".to_string(), "open".to_string(), "aaa".to_string()];
         let got = ordered_statuses(&order);
         assert_eq!(got, vec!["open", "zzz", "aaa"]);
+    }
+}
+
+#[cfg(test)]
+mod nav_tests {
+    use super::*;
+    use crate::plan::model::{LoadedTask, Task};
+
+    fn task(status: &str, slug: &str) -> LoadedTask {
+        LoadedTask {
+            slug: slug.to_string(),
+            task: Task {
+                status: status.to_string(),
+                task_type: "feature".to_string(),
+                priority: "medium".to_string(),
+                area: String::new(),
+            },
+        }
+    }
+
+    fn app_two_tasks() -> App<'static> {
+        let cfg = Box::leak(Box::new(Config::default()));
+        let root = Box::leak(Box::new(std::path::PathBuf::from("/tmp")));
+        let tasks = vec![task("in-progress", "aaa"), task("done", "zzz")];
+        App::new(root, cfg, tasks, Vec::new())
+    }
+
+    #[test]
+    fn up_from_first_wraps_to_last() {
+        let mut app = app_two_tasks();
+        assert_eq!((app.selected_column, app.selected_task), (0, 0));
+        app.handle_task_key(crossterm::event::KeyCode::Up);
+        let last = app.columns.len() - 1;
+        assert_eq!((app.selected_column, app.selected_task), (last, 0));
+    }
+
+    #[test]
+    fn down_from_last_wraps_to_first() {
+        let mut app = app_two_tasks();
+        let last = app.columns.len() - 1;
+        app.selected_column = last;
+        app.selected_task = 0;
+        app.handle_task_key(crossterm::event::KeyCode::Down);
+        assert_eq!((app.selected_column, app.selected_task), (0, 0));
+    }
+
+    #[test]
+    fn page_down_jumps_to_last_then_wraps() {
+        use crossterm::event::KeyCode;
+        let mut app = app_two_tasks();
+        let last = app.columns.len() - 1;
+        app.handle_task_key(KeyCode::PageDown);
+        assert_eq!((app.selected_column, app.selected_task), (last, 0));
+        app.handle_task_key(KeyCode::PageDown);
+        assert_eq!((app.selected_column, app.selected_task), (0, 0));
+    }
+
+    #[test]
+    fn page_up_jumps_to_first_then_wraps() {
+        use crossterm::event::KeyCode;
+        let mut app = app_two_tasks();
+        let last = app.columns.len() - 1;
+        app.selected_column = last;
+        app.handle_task_key(KeyCode::PageUp);
+        assert_eq!((app.selected_column, app.selected_task), (0, 0));
+        app.handle_task_key(KeyCode::PageUp);
+        assert_eq!((app.selected_column, app.selected_task), (last, 0));
     }
 }
