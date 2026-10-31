@@ -21,9 +21,9 @@ then ride-alongs.
 - [x] Step 4: pin action SHAs.
 - [x] Step 5: `list_tasks` returns `Result` (drop lib `exit`).
 - [x] Step 6: slug truncation char boundary (+ helper test).
-- [ ] Step 7: MSRV job runs check + smoke, not just test.
-- [ ] Step 8: fix intra-doc links (`cargo doc` clean).
-- [ ] Step 9: sorted `format <dir>` + surface `read_dir` errors (helper + test).
+- [x] Step 7: MSRV job runs check + smoke, not just test.
+- [x] Step 8: fix intra-doc links (`cargo doc` clean).
+- [x] Step 9: sorted `format <dir>` + surface `read_dir` errors (helper + test).
 - [x] Step 10: `multiple-versions` policy — decide, document, set.
 
 ## Acceptance
@@ -33,6 +33,11 @@ then ride-alongs.
 
 ## Progress (newest first)
 
+- 2026-10-31: Steps 7+8+9 DONE. MSRV job runs clippy + smoke on 1.89
+  (proven locally first; no fmt — rustfmt drifts between versions).
+  Doc links use explicit crate paths (`cargo doc` zero warnings).
+  `store::sorted_md_entries` (sorted, Err on IO failure) rewired into
+  `plan format <dir>` + gloss browser; unit + e2e pins. 128 green.
 - 2026-10-31: Step 6 DONE (TDD: helper RED missing, GREEN first pass).
   `truncate_slug` floors to char boundary, byte-identical for ASCII;
   both call sites deduplicated through it. 3 tests, 125 green.

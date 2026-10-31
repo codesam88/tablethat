@@ -54,7 +54,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install MSRV toolchain
-        run: rustup toolchain install 1.89 --profile minimal
+        run: rustup toolchain install 1.89 --profile minimal --component clippy
 
       - name: Test on MSRV
         run: cargo +1.89 test
+
+      - name: Clippy on MSRV
+        run: cargo +1.89 clippy -- -D warnings
+
+      - name: Smoke on MSRV
+        run: |
+          cargo +1.89 build
+          ./target/debug/plan --help
+          echo '# hi' | ./target/debug/gloss --width 80

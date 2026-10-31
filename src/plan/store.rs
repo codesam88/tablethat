@@ -1,6 +1,20 @@
 use crate::launch;
 use std::path::PathBuf;
 
+/// Sorted `.md` entries of any directory (not just task dirs).
+/// Unlike a bare `read_dir`, an unreadable directory is `Err` — callers
+/// must not mistake IO failure for an empty listing.
+pub fn sorted_md_entries(dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
+    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    v.sort();
+    Ok(v)
+}
+
 /// List `.md` task files in a directory, sorted, excluding `.TEMPLATE.md`.
 pub fn read_task_files(tasks_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
     match std::fs::read_dir(tasks_dir) {
@@ -443,5 +457,32 @@ mod tests {
         let (fm, _) = crate::plan::model::parse_frontmatter(&text).unwrap();
         let v: serde_json::Value = serde_saphyr::from_str(&fm).unwrap();
         assert_eq!(v["area"], "a: b");
+    }
+}
+
+#[cfg(test)]
+mod entries_tests {
+    use crate::plan::store::sorted_md_entries;
+
+    #[test]
+    fn sorted_md_entries_returns_sorted_markdown_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["c.md", "a.md", "b.md", "note.txt"] {
+            std::fs::write(tmp.path().join(name), "x").unwrap();
+        }
+        let got = sorted_md_entries(tmp.path()).expect("readable");
+        let names: Vec<String> = got
+            .iter()
+            .map(|p| p.file_name().expect("name").to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["a.md", "b.md", "c.md"]);
+    }
+
+    #[test]
+    fn sorted_md_entries_errors_on_unreadable_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nope");
+        let err = sorted_md_entries(&missing).expect_err("missing dir must error");
+        assert!(err.contains("nope"), "error names the dir: {err}");
     }
 }

@@ -278,14 +278,13 @@ pub fn run_directory_browser(
     themes: &[lib::theme::ThemeFile],
     width: usize,
 ) {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
-        .collect();
-    files.sort();
+    let files = match lib::plan::store::sorted_md_entries(dir) {
+        Ok(files) => files,
+        Err(e) => {
+            eprintln!("gloss: {e}");
+            return;
+        }
+    };
 
     if files.is_empty() {
         eprintln!("no .md files found in {}", dir.display());

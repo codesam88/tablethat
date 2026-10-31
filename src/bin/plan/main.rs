@@ -292,13 +292,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Some(Commands::Format { path }) => match path {
             Some(p) => {
                 if p.is_dir() {
-                    let entries: Vec<PathBuf> = std::fs::read_dir(&p)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|e| e.ok())
-                        .map(|e| e.path())
-                        .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
-                        .collect();
+                    let entries = tablethat_lib::plan::store::sorted_md_entries(&p)?;
                     let mut errors: Vec<String> = Vec::new();
                     for entry in &entries {
                         match tablethat_lib::plan::format::format_file(entry, 120) {

@@ -234,6 +234,13 @@ fn add_rejects_newline_field_values() {
 }
 
 #[test]
+fn format_nonexistent_path_is_error() {
+    let r = Root::new();
+    let out = r.run(r.plan().arg("format").arg(r.path().join("nope")));
+    assert!(!out.status.success(), "bogus path must fail");
+}
+
+#[test]
 fn delete_removes_task_and_fails_when_missing() {
     let r = Root::new();
     assert!(r.run(r.plan().arg("init")).status.success());

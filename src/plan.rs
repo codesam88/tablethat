@@ -1,8 +1,10 @@
 //! Task management: model, query, lint, display, store, format, TUI.
 //!
-//! Entry points: [`store`] (CRUD + slug resolution), [`query`] (filter/sort),
-//! [`lint`] (schema validation), [`display`] (list/kanban output),
-//! [`format`] (canonical rewriting), [`tui`] (interactive browser).
+//! Entry points: [`crate::plan::store`] (CRUD + slug resolution),
+//! [`crate::plan::query`] (filter/sort), [`crate::plan::lint`] (schema
+//! validation), [`crate::plan::display`] (list/kanban output),
+//! [`crate::plan::format`] (canonical rewriting),
+//! [`crate::plan::tui`] (interactive browser).
 
 /// List/kanban terminal output.
 pub mod display;
