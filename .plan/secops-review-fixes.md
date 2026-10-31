@@ -16,7 +16,7 @@ then ride-alongs.
 - [x] Step 0: `cargo update`, verify suite + deny/audit, commit lockfile.
 - [x] Step 1: frontmatter injection — validate values in `create_task`,
   YAML-quote strings in `value_to_yaml_str` (TDD).
-- [ ] Step 2: gloss highlight Unicode panic — char-aware offsets (TDD).
+- [x] Step 2: gloss highlight Unicode panic — char-aware offsets (TDD).
 - [ ] Step 3: release gates — test/clippy/audit before publish.
 - [ ] Step 4: pin action SHAs.
 - [ ] Step 5: `list_tasks` returns `Result` (drop lib `exit`).
@@ -33,6 +33,10 @@ then ride-alongs.
 
 ## Progress (newest first)
 
+- 2026-10-31: Step 2 DONE (TDD: helper RED missing, then 1 wrong test
+  expectation corrected — "Hello" matches too). `ci_match_ranges` maps
+  lowercase expansions back to whole source chars; non-overlapping like
+  `match_indices`; ASCII behavior identical. 4 tests, 121 green.
 - 2026-10-31: Step 10 DONE out of order (user ran the experiment live:
   deleting the line surfaces only transitive ratatui-ecosystem dupes as
   warnings). Policy kept + rationale recorded in deny.toml comments.
