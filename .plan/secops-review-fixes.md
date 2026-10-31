@@ -24,7 +24,7 @@ then ride-alongs.
 - [ ] Step 7: MSRV job runs check + smoke, not just test.
 - [ ] Step 8: fix intra-doc links (`cargo doc` clean).
 - [ ] Step 9: sorted `format <dir>` + surface `read_dir` errors (helper + test).
-- [ ] Step 10: `multiple-versions` policy — decide, document, set.
+- [x] Step 10: `multiple-versions` policy — decide, document, set.
 
 ## Acceptance
 
@@ -33,6 +33,9 @@ then ride-alongs.
 
 ## Progress (newest first)
 
+- 2026-10-31: Step 10 DONE out of order (user ran the experiment live:
+  deleting the line surfaces only transitive ratatui-ecosystem dupes as
+  warnings). Policy kept + rationale recorded in deny.toml comments.
 - 2026-10-31: Step 1 DONE (TDD: 6 contract tests RED, GREEN first pass).
   `model::yaml_quote` (bare words pass through, specials double-quoted,
   empty stays bare); `create_task` rejects `\n`/`\r` values; `Null` arm
