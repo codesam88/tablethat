@@ -11,7 +11,7 @@ format:
     cargo fmt
 
 # cargo fmt --check + cargo clippy
-check:
+check: zizmor-check
     cargo fmt --check
     cargo clippy -- -D warnings
 
@@ -49,6 +49,10 @@ audit:
     cargo deny check
     cargo audit
 
+# Lint workflows offline (no network)
+zizmor-check:
+    zizmor --offline --min-severity low .github/workflows
+
 # install binaries + themes to ~/.config
 install:
     cargo install --path .
@@ -63,9 +67,9 @@ uninstall:
     @rm -f ~/.config/plan/themes/*.toml ~/.config/gloss/themes/*.toml
     @echo "Removed binaries and themes"
 
-# install cargo-deny + cargo-audit
+# install cargo-deny + cargo-audit + zizmor
 install-dev:
-    cargo install cargo-deny cargo-audit
+    cargo install cargo-deny cargo-audit zizmor
 
 # install dev tools + pre-commit hook
 setup-dev: install-dev
