@@ -364,15 +364,24 @@ fn tokenize_content(content: &str, code_intervals: &[(usize, usize)]) -> Vec<(St
     atoms
 }
 
-fn starts_with_list_marker(s: &str) -> bool {
+/// Returns true if a continuation line beginning with `s` would be parsed
+/// as opening a new block (list item, blockquote, heading, fence, thematic
+/// break, or link reference definition) rather than continuing the current
+/// paragraph. Such atoms must never start a continuation line.
+fn would_start_block(s: &str) -> bool {
     let t = s.trim_start();
+    if t.is_empty() {
+        return false;
+    }
+
+    // List markers (lone or followed by space).
     if t == "-" || t == "*" || t == "+" {
         return true;
     }
     if t.starts_with("- ") || t.starts_with("* ") || t.starts_with("+ ") {
         return true;
     }
-    // ordered: digits followed by "." or ")" (possibly with trailing space)
+    // Ordered list markers: digits then "." or ")".
     let mut i = 0;
     for c in t.chars() {
         if c.is_ascii_digit() {
@@ -387,6 +396,47 @@ fn starts_with_list_marker(s: &str) -> bool {
             return true;
         }
     }
+
+    // Blockquote opener.
+    if t.starts_with('>') {
+        return true;
+    }
+
+    // ATX heading: 1-6 `#` followed by space or end.
+    let hashes = t.chars().take_while(|c| *c == '#').count();
+    if (1..=6).contains(&hashes) {
+        let rest = &t[hashes..];
+        if rest.is_empty() || rest.starts_with(' ') {
+            return true;
+        }
+    }
+
+    // Fenced code block opener: 3+ backticks or tildes.
+    let bt = t.chars().take_while(|c| *c == '`').count();
+    if bt >= 3 {
+        return true;
+    }
+    let tl = t.chars().take_while(|c| *c == '~').count();
+    if tl >= 3 {
+        return true;
+    }
+
+    // Thematic break: exactly `---`, `***`, or `___` (possibly with spaces).
+    let stripped_spaces: String = t.chars().filter(|c| *c != ' ').collect();
+    if stripped_spaces == "---" || stripped_spaces == "***" || stripped_spaces == "___" {
+        return true;
+    }
+
+    // Link reference definition shape: `[label]:`.
+    if t.starts_with('[')
+        && let Some(close) = t.find(']')
+    {
+        let after = &t[close + 1..];
+        if after.trim_start().starts_with(':') {
+            return true;
+        }
+    }
+
     false
 }
 
@@ -402,7 +452,7 @@ fn wrap_atoms(atoms: &[(String, bool)], max_width: usize) -> Vec<String> {
         } else {
             cur_len + alen
         };
-        let marker_like = starts_with_list_marker(atom);
+        let marker_like = would_start_block(atom);
         if cur.is_empty() {
             // First output line keeps the source prefix and is safe.
             cur = atom.clone();
@@ -1061,7 +1111,7 @@ mod tests {
         for line in out.lines().skip(1) {
             let t = line.trim_start();
             assert!(
-                !starts_with_list_marker(t),
+                !would_start_block(t),
                 "continuation starts with marker: {:?}",
                 line
             );
@@ -1080,13 +1130,48 @@ mod tests {
         for line in out.lines().skip(1) {
             let t = line.trim_start();
             assert!(
-                !starts_with_list_marker(t),
+                !would_start_block(t),
                 "continuation starts with marker: {:?}",
                 line
             );
         }
         html_eq(s, &out);
         assert_eq!(splice_format(&out, 80, true), out, "fixpoint");
+    }
+
+    #[test]
+    fn continuation_never_starts_blockquote() {
+        let s = "a".repeat(39)
+            + " > rest of the words here and more words to fill out the paragraph body text\n";
+        let out = splice_format(&s, 40, true);
+        for line in out.lines() {
+            let t = line.trim_start();
+            assert!(
+                !t.starts_with('>'),
+                "continuation starts with >: {:?}",
+                line
+            );
+        }
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 40, true), out, "fixpoint");
+    }
+
+    #[test]
+    fn continuation_never_opens_fence_or_heading() {
+        let s = "aaa bbb ccc ddd eee fff ggg hhh iii ``` kkk lll mmm nnn ooo ppp qqq rrr sss ttt uuu vvv www xxx yyy zzz end here\n";
+        let out = splice_format(&s, 40, true);
+        for line in out.lines() {
+            let t = line.trim_start();
+            assert!(!t.starts_with("```"), "fence opened: {:?}", line);
+            assert!(!t.starts_with("~~~"), "fence opened: {:?}", line);
+            assert!(
+                !(t.starts_with('#') && (t.len() == 1 || t.as_bytes().get(1) == Some(&b' '))),
+                "heading opened: {:?}",
+                line
+            );
+        }
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 40, true), out, "fixpoint");
     }
 
     // ---- STEP 1 tests (worker 3) ----
