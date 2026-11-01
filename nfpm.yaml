@@ -1,4 +1,4 @@
-# tablethat system packages (deb + rpm) from static musl binaries.
+# tablethat system packages (deb + rpm) from distro-native gnu binaries.
 # Built in CI: VERSION comes from the release tag (e.g. 0.1.0).
 # This file is amd64; nfpm-arm64.yaml is the arm64 twin (keep in sync).
 name: tablethat
@@ -11,12 +11,19 @@ maintainer: codesam <tedsamhain@gmail.com>
 description: plan + gloss — task management and markdown viewing
 homepage: https://github.com/codesam88/tablethat
 license: MIT OR Apache-2.0
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.39)
+  rpm:
+    depends:
+      - glibc >= 2.39
 contents:
-  - src: pkg-bin/plan
+  - src: target/release/plan
     dst: /usr/bin/plan
     type: file
     file_info: { mode: 0755 }
-  - src: pkg-bin/gloss
+  - src: target/release/gloss
     dst: /usr/bin/gloss
     type: file
     file_info: { mode: 0755 }
