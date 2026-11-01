@@ -1,15 +1,16 @@
 # tablethat tarball install — no dependencies beyond coreutils `install(1)`.
+# Installs to user-local paths by default (no sudo needed):
 #
 #   tar xzf tablethat-<target>.tar.gz && cd tablethat
-#   sudo make install                      # -> /usr/local
-#   sudo make install PREFIX=/usr          # distro-style prefix
-#   make install DESTDIR=/tmp/stage        # staged install (packagers)
-#   sudo make uninstall                    # removes exactly what install added
+#   make install                         # -> ~/.local
+#   make install PREFIX=/usr/local       # system-wide (needs sudo)
+#   make install DESTDIR=/tmp/stage      # staged install (packagers)
+#   make uninstall                       # removes exactly what install added
 #
-# System-wide themes land in <prefix>/share/tablethat/themes; user config
-# in ~/.config/{plan,gloss}/ still takes precedence.
+# System-wide themes land in <prefix>/share/tablethat/themes; per-user
+# config in ~/.config/{plan,gloss}/ still takes precedence.
 
-PREFIX ?= /usr/local
+PREFIX ?= $(HOME)/.local
 BINDIR = $(DESTDIR)$(PREFIX)/bin
 THEMEDIR = $(DESTDIR)$(PREFIX)/share/tablethat/themes
 DOCDIR = $(DESTDIR)$(PREFIX)/share/doc/tablethat
