@@ -22,11 +22,10 @@
 # Wrap width when opening in gloss pager (default: 100, passed on best effort)
 # pager_width = 100
 
-# Wrap width for `plan format` (default: 80)
-# format_width = 80
-
-# Whether `plan format` joins short lines into flow before re-splitting (default: true)
-# format_reflow = true
+# Format configuration for `plan format`
+# [format]
+# width = 80
+# reflow = true
 
 # Theme directory (default: ./themes/)
 # themes_dir = "themes"

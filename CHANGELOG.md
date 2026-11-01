@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Formatter rewritten as conservative splice engine (80-col split-only wrap, lossless tables)
-- `format_reflow` config (default true) joins short lines into flow before re-splitting; `format_width`/`format_reflow` in `Config`
+- `format.reflow` (default true) joins short lines into flow before re-splitting; `[format]` section in `Config`
 
 ## [0.1.1] – 2026-11-01
 
