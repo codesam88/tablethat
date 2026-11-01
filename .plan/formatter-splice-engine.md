@@ -19,7 +19,8 @@ pipe-in-code-span table loss.
 Done: shared `comrak_options()` constructor (renderer + formatter).
 Requirements v3: configurable prose wrap (default 80, split-only,
 containers wrapped with continuation indent, code spans atomic).
-Next: D-2 answer, then iterative implementation breakdown.
+D-2 confirmed (keep pad-to-width pipe style).
+Next: engine implementation, worker 1 (skeleton + whitespace).
 
 ## Plan
 
@@ -108,7 +109,7 @@ Sentence-per-line (semantic) breaks — wrapping is width-driven only.
 #### Open decisions (need answers before implementation)
 
 - **D-2 — Table alignment style:** keep the current pad-to-width pipe
-  style, only fixing the mechanism? (Assumed yes.)
+  style, only fixing the mechanism? Confirmed — keep style.
 
 Decided without review: width math uses byte columns (matches the
 current `align_tables` behavior; corpus is ASCII). Unicode display width
