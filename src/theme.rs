@@ -55,6 +55,7 @@ pub struct ThemeFile {
 /// 1. Explicit `themes_dir` path
 /// 2. `./themes/` relative to cwd
 /// 3. `~/.config/<app_name>/themes/`
+/// 4. System dirs (`/usr/local/share`, `/usr/share`) for packaged installs.
 ///
 /// Thin wrapper over [`load_themes_with_errors`] that warns on stderr for
 /// each skipped file.
@@ -82,6 +83,9 @@ pub fn load_themes_with_errors(
         if let Some(proj_dirs) = directories::ProjectDirs::from("", "", app_name) {
             candidates.push(proj_dirs.config_dir().join("themes"));
         }
+        // System locations for deb/rpm installs (read-only, lowest priority).
+        candidates.push(PathBuf::from("/usr/local/share/tablethat/themes"));
+        candidates.push(PathBuf::from("/usr/share/tablethat/themes"));
         candidates
     };
 
