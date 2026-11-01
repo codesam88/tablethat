@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -867,22 +867,7 @@ impl App<'_> {
                     Mode::Preview => {
                         // Search mode input
                         if self.search_mode {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    self.search_mode = false;
-                                }
-                                KeyCode::Enter => {
-                                    self.search_mode = false;
-                                    self.run_preview_search();
-                                }
-                                KeyCode::Backspace => {
-                                    self.search_query.pop();
-                                }
-                                KeyCode::Char(ch) => {
-                                    self.search_query.push(ch);
-                                }
-                                _ => {}
-                            }
+                            self.handle_preview_search_key(key);
                             return Ok(Action::None);
                         }
 
@@ -929,7 +914,7 @@ impl App<'_> {
                         // Filter-as-you-type search: handled separately so
                         // Up/Down can confirm the filter and start moving.
                         if self.search_mode {
-                            self.handle_search_key(key.code);
+                            self.handle_search_key(key);
                             return Ok(Action::None);
                         }
                         return Ok(match key.code {
@@ -1096,22 +1081,30 @@ impl App<'_> {
         self.reload_tasks();
     }
 
+    /// Leave browse search, dropping the query and title filter.
+    fn cancel_browse_search(&mut self) {
+        self.search_mode = false;
+        self.search_query.clear();
+        self.browse_title = None;
+        self.reload_tasks();
+    }
+
     /// Search-mode keys: typing refilters live, Enter keeps the filter,
-    /// Esc clears it, Up/Down confirm it and start moving.
-    fn handle_search_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Esc => {
-                self.search_mode = false;
-                self.search_query.clear();
-                self.browse_title = None;
-                self.reload_tasks();
-            }
+    /// Esc/Ctrl-C clears it, Up/Down confirm it and start moving.
+    fn handle_search_key(&mut self, key: KeyEvent) {
+        // Ctrl-C cancels exactly like Esc (otherwise it would type `c`).
+        if matches!(key.code, KeyCode::Char('c')) && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.cancel_browse_search();
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => self.cancel_browse_search(),
             KeyCode::Enter => {
                 self.search_mode = false;
             }
             KeyCode::Up | KeyCode::Down => {
                 self.search_mode = false;
-                self.handle_task_key(code);
+                self.handle_task_key(key.code);
             }
             KeyCode::Backspace => {
                 self.search_query.pop();
@@ -1120,6 +1113,30 @@ impl App<'_> {
             KeyCode::Char(ch) => {
                 self.search_query.push(ch);
                 self.apply_browse_search();
+            }
+            _ => {}
+        }
+    }
+
+    /// Preview search-mode keys. Ctrl-C cancels exactly like Esc
+    /// (otherwise it would type `c`); unlike browse, the query is kept.
+    fn handle_preview_search_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.search_mode = false;
+            }
+            KeyCode::Esc => {
+                self.search_mode = false;
+            }
+            KeyCode::Enter => {
+                self.search_mode = false;
+                self.run_preview_search();
+            }
+            KeyCode::Backspace => {
+                self.search_query.pop();
+            }
+            KeyCode::Char(ch) => {
+                self.search_query.push(ch);
             }
             _ => {}
         }
@@ -1430,8 +1447,8 @@ mod search_tests {
         let (_tmp, mut app) = app_with_files();
         assert_eq!(app.tasks.len(), 2);
         app.search_mode = true;
-        app.handle_search_key(KeyCode::Char('b'));
-        app.handle_search_key(KeyCode::Char('c'));
+        app.handle_search_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        app.handle_search_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
         let slugs: Vec<&str> = app.tasks.iter().map(|t| t.slug.as_str()).collect();
         // "xyz" matches 'b'/'c' only via its body — must be excluded.
         assert_eq!(slugs, vec!["abc"]);
@@ -1441,9 +1458,9 @@ mod search_tests {
     fn backspace_to_empty_restores_all() {
         let (_tmp, mut app) = app_with_files();
         app.search_mode = true;
-        app.handle_search_key(KeyCode::Char('b'));
+        app.handle_search_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
         assert_eq!(app.tasks.len(), 1);
-        app.handle_search_key(KeyCode::Backspace);
+        app.handle_search_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         assert_eq!(app.tasks.len(), 2);
         assert!(app.browse_title.is_none());
     }
@@ -1453,9 +1470,9 @@ mod search_tests {
         let (_tmp, mut app) = app_with_files();
         app.filter_priority = Some("medium".to_string());
         app.search_mode = true;
-        app.handle_search_key(KeyCode::Char('b'));
+        app.handle_search_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
         assert_eq!(app.tasks.len(), 1);
-        app.handle_search_key(KeyCode::Esc);
+        app.handle_search_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.search_mode);
         assert!(app.search_query.is_empty());
         assert!(app.browse_title.is_none());
@@ -1472,7 +1489,7 @@ mod search_tests {
         app.search_mode = true;
         app.search_query = "a".to_string();
         app.browse_title = Some("a".to_string());
-        app.handle_search_key(KeyCode::Up);
+        app.handle_search_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert!(!app.search_mode, "Up confirms the filter");
         assert_eq!(app.browse_title.as_deref(), Some("a"), "filter kept");
         let last = app.columns.len() - 1;
@@ -1518,5 +1535,53 @@ mod clear_search_tests {
         assert!(app.search_query.is_empty(), "query must clear");
         assert!(app.browse_title.is_none(), "filter must clear");
         assert_eq!(app.footer_search_line(), None, "bar must revert");
+    }
+}
+
+#[cfg(test)]
+mod search_cancel_tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_c_cancels_search_like_esc() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        for slug in ["abc", "xyz"] {
+            std::fs::write(
+                dir.join(format!("{slug}.md")),
+                "---\nstatus: open\ntype: feature\npriority: medium\n---\n\nbody\n",
+            )
+            .unwrap();
+        }
+        let cfg = Box::leak(Box::new(Config::default()));
+        let root = Box::leak(Box::new(dir.to_path_buf()));
+        let entries: Vec<PathBuf> = vec![dir.join("abc.md"), dir.join("xyz.md")];
+        let mut app = App::new(root, cfg, Vec::new(), entries);
+        app.reload_tasks();
+        app.search_mode = true;
+        app.handle_search_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(app.tasks.len(), 1);
+        app.handle_search_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(!app.search_mode, "ctrl-c leaves search mode");
+        assert!(app.search_query.is_empty(), "query cleared");
+        assert!(app.browse_title.is_none(), "filter cleared");
+        assert_eq!(app.tasks.len(), 2, "tasks restored");
+    }
+}
+
+#[cfg(test)]
+mod preview_search_cancel_tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_c_exits_preview_search_like_esc() {
+        let cfg = Box::leak(Box::new(Config::default()));
+        let root = Box::leak(Box::new(std::path::PathBuf::from("/tmp")));
+        let mut app = App::new(root, cfg, Vec::new(), Vec::new());
+        app.search_mode = true;
+        app.search_query = "x".to_string();
+        app.handle_preview_search_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(!app.search_mode, "ctrl-c leaves search mode");
+        assert_eq!(app.search_query, "x", "preview keeps query like Esc");
     }
 }

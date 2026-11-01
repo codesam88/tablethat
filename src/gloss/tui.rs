@@ -1,6 +1,6 @@
 use crate as lib;
 use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
 use crossterm::terminal;
 use ratatui::{
@@ -589,6 +589,35 @@ fn render(frame: &mut Frame, app: &mut App) {
     frame.render_widget(status, status_area);
 }
 
+/// Leave search mode, dropping the query, hits, and selection.
+fn cancel_search(app: &mut App) {
+    app.search_mode = false;
+    app.search_query.clear();
+    app.search_hits.clear();
+    app.search_index = 0;
+    app.load_selected();
+}
+
+/// Search-mode keys. Ctrl-C cancels exactly like Esc (otherwise it
+/// would type `c`).
+fn handle_search_input(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => cancel_search(app),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => cancel_search(app),
+        KeyCode::Enter => {
+            app.search_mode = false;
+            app.run_search();
+        }
+        KeyCode::Backspace => {
+            app.search_query.pop();
+        }
+        KeyCode::Char(ch) => {
+            app.search_query.push(ch);
+        }
+        _ => {}
+    }
+}
+
 fn handle_events(app: &mut App, _cfg: &lib::Config) -> Result<Action, Box<dyn std::error::Error>> {
     if !event::poll(std::time::Duration::from_millis(100))? {
         return Ok(Action::None);
@@ -613,26 +642,7 @@ fn handle_events(app: &mut App, _cfg: &lib::Config) -> Result<Action, Box<dyn st
 
             // Search mode input
             if app.search_mode {
-                match key.code {
-                    KeyCode::Esc => {
-                        app.search_mode = false;
-                        app.search_query.clear();
-                        app.search_hits.clear();
-                        app.search_index = 0;
-                        app.load_selected();
-                    }
-                    KeyCode::Enter => {
-                        app.search_mode = false;
-                        app.run_search();
-                    }
-                    KeyCode::Backspace => {
-                        app.search_query.pop();
-                    }
-                    KeyCode::Char(ch) => {
-                        app.search_query.push(ch);
-                    }
-                    _ => {}
-                }
+                handle_search_input(app, key);
                 return Ok(Action::None);
             }
 
@@ -1131,5 +1141,26 @@ mod scrollbar_glyph_tests {
         let plain = Style::default().fg(Color::DarkGray);
         assert_eq!(scrollbar_glyph(plain, hl_cur(), hl(), true), "█");
         assert_eq!(scrollbar_glyph(plain, hl_cur(), hl(), false), "│");
+    }
+}
+
+#[cfg(test)]
+mod search_cancel_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn ctrl_c_cancels_search_like_esc() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true);
+        app.search_mode = true;
+        app.search_query = "x".to_string();
+        app.search_hits = vec![3];
+        handle_search_input(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(!app.search_mode, "ctrl-c leaves search mode");
+        assert!(app.search_query.is_empty(), "query cleared");
+        assert!(app.search_hits.is_empty(), "hits cleared");
     }
 }
