@@ -1,0 +1,243 @@
+name: Rolling release
+
+# Floating `head` prerelease, rebuilt from main and overwritten every run.
+# For trying the latest features; not kept, not stable. Stable releases
+# stay on version tags (release.yml) and remain GitHub's "latest".
+#
+# Triggered by successful CI on main (never on red), so no gate
+# duplication: if CI is green, main is shippable.
+
+on:
+  # Assessed false positive (dangerous-triggers): fires only for CI on the
+  # protected main branch, checks out the main tip (never a PR head), runs
+  # only when CI is green, and compiles solely in contents:read jobs. The
+  # write-token job executes no repo code.
+  # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Rapid pushes collapse: only the newest main tip gets published.
+concurrency:
+  group: rolling-release
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Same release-only MSRV gate as release.yml: rolling must not ship
+  # what a version tag would refuse.
+  msrv:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install just and uv
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2
+        with:
+          tool: just,uv
+
+      # Must match Cargo.toml rust-version; everything below then runs on MSRV.
+      - name: Install MSRV toolchain
+        run: rustup toolchain install 1.89 --profile minimal
+
+      - name: Add Rust components
+        run: rustup component add --toolchain 1.89 clippy rustfmt
+
+      - name: Use MSRV toolchain
+        run: rustup default 1.89
+
+      - name: Check (format + clippy)
+        run: just check
+
+      - name: Test
+        run: just test
+
+      - name: Smoke test
+        run: just smoke
+
+  build:
+    if: github.event.workflow_run.conclusion == 'success'
+    needs: [msrv]
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        run: |
+          rm -rf pkg && mkdir -p pkg/tablethat
+          cp target/${{ matrix.target }}/release/plan target/${{ matrix.target }}/release/gloss pkg/tablethat/
+          cp README.md LICENSE-MIT LICENSE-APACHE plan.toml.example pkg/tablethat/
+          cp -r themes pkg/tablethat/
+          cp packaging/Makefile pkg/tablethat/
+          tar czf tablethat-${{ matrix.target }}.tar.gz -C pkg tablethat
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tablethat-${{ matrix.target }}
+          path: tablethat-${{ matrix.target }}.*
+
+  package:
+    if: github.event.workflow_run.conclusion == 'success'
+    needs: [msrv]
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            nfpm_arch: x86_64
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            nfpm_arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build static binaries
+        env:
+          # Self-contained musl link: no musl-gcc needed, fully static output.
+          RUSTFLAGS: "-C link-self-contained=yes"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Assert static linking
+        run: |
+          file target/${{ matrix.target }}/release/plan
+          file target/${{ matrix.target }}/release/gloss
+          file target/${{ matrix.target }}/release/plan | grep -Eq "statically linked|static-pie linked"
+          file target/${{ matrix.target }}/release/gloss | grep -Eq "statically linked|static-pie linked"
+
+      - name: Stage binaries
+        run: |
+          mkdir -p pkg-bin
+          cp target/${{ matrix.target }}/release/plan target/${{ matrix.target }}/release/gloss pkg-bin/
+
+      - name: Install nfpm
+        run: |
+          curl -sLf -o /tmp/nfpm.tar.gz https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_Linux_${{ matrix.nfpm_arch }}.tar.gz
+          tar xzf /tmp/nfpm.tar.gz -C /tmp
+          sudo install -m755 /tmp/nfpm /usr/local/bin/nfpm
+
+      - name: Build deb and rpm
+        run: |
+          conf=nfpm.yaml; [ "${{ matrix.arch }}" = arm64 ] && conf=nfpm-arm64.yaml
+          VERSION="0.0.0~head.${GITHUB_SHA::7}" nfpm package --config "$conf" --packager deb
+          VERSION="0.0.0~head.${GITHUB_SHA::7}" nfpm package --config "$conf" --packager rpm
+          dpkg-deb --field tablethat_*.deb Package Version Architecture
+          ls -la tablethat_*.deb tablethat-*.rpm
+
+      - name: Package static tarball
+        run: |
+          rm -rf static && mkdir -p static/tablethat
+          cp pkg-bin/plan pkg-bin/gloss static/tablethat/
+          cp README.md LICENSE-MIT LICENSE-APACHE plan.toml.example packaging/Makefile static/tablethat/
+          cp -r themes static/tablethat/
+          tar czf tablethat-${{ matrix.target }}.tar.gz -C static tablethat
+
+      - name: Upload packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tablethat-packages-${{ matrix.arch }}
+          path: |
+            tablethat_*.deb
+            tablethat-*.rpm
+            tablethat-*.tar.gz
+
+  publish:
+    if: github.event.workflow_run.conclusion == 'success'
+    needs: [build, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          sha256sum tablethat-*.tar.gz tablethat_*.deb tablethat-*.rpm > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # Rolling release: delete the previous `head` release (if any) and
+      # recreate everything, so no stale assets survive. Stable version
+      # tags are never touched; the floating tag moves via API (keeps
+      # persist-credentials: false).
+      - name: Delete previous rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete head --cleanup-tag --yes || true
+
+      - name: Move floating tag to main tip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method POST "repos/${{ github.repository }}/git/refs" \
+            -f ref='refs/tags/head' -f sha="${{ github.sha }}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: SHA256SUMS.txt
+
+      - name: Create rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create head \
+            --prerelease \
+            --title "Rolling build (main @ ${GITHUB_SHA::7})" \
+            --generate-notes \
+            --target "${GITHUB_SHA}" \
+            tablethat-*.tar.gz tablethat_*.deb tablethat-*.rpm SHA256SUMS.txt
