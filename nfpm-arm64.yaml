@@ -12,11 +12,11 @@ description: plan + gloss — task management and markdown viewing
 homepage: https://github.com/codesam88/tablethat
 license: MIT OR Apache-2.0
 contents:
-  - src: target/release/plan
+  - src: pkg-bin/plan
     dst: /usr/bin/plan
     type: file
     file_info: { mode: 0755 }
-  - src: target/release/gloss
+  - src: pkg-bin/gloss
     dst: /usr/bin/gloss
     type: file
     file_info: { mode: 0755 }
