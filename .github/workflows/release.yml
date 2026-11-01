@@ -154,6 +154,14 @@ jobs:
           dpkg-deb --field tablethat_*.deb Package Version Architecture
           ls -la tablethat_*.deb tablethat-*.rpm
 
+      - name: Package static tarball
+        run: |
+          rm -rf static && mkdir -p static/tablethat
+          cp pkg-bin/plan pkg-bin/gloss static/tablethat/
+          cp README.md LICENSE-MIT LICENSE-APACHE plan.toml.example packaging/Makefile static/tablethat/
+          cp -r themes static/tablethat/
+          tar czf tablethat-${{ matrix.target }}.tar.gz -C static tablethat
+
       - name: Upload packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -161,6 +169,7 @@ jobs:
           path: |
             tablethat_*.deb
             tablethat-*.rpm
+            tablethat-*.tar.gz
 
   release:
     needs: [build, package]

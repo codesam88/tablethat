@@ -40,6 +40,9 @@ default directories (typically `~/.cargo/bin/` and `~/.config/{plan,gloss}/`).
     make install PREFIX=/usr/local       # system-wide
     make uninstall                       # removes exactly what install added
 
+Prebuilt glibc binaries need glibc 2.39+ (Ubuntu 24.04+, Debian 13+);
+for anything older use the static `-musl` tarball or `.deb`/`.rpm`.
+
 ### Development
 
     just setup-dev           # installs audit tools + enables the pre-commit hook
