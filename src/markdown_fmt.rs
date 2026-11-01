@@ -402,10 +402,25 @@ fn wrap_atoms(atoms: &[(String, bool)], max_width: usize) -> Vec<String> {
         } else {
             cur_len + alen
         };
+        let marker_like = starts_with_list_marker(atom);
         if cur.is_empty() {
+            // First output line keeps the source prefix and is safe.
             cur = atom.clone();
             cur_len = alen;
-        } else if total <= max_width {
+            continue;
+        }
+        if marker_like {
+            // Never start a continuation line with a marker-like token: glue
+            // it onto the current line even if that overflows slightly.
+            if add_space {
+                cur.push(' ');
+                cur_len += 1;
+            }
+            cur.push_str(atom);
+            cur_len += alen;
+            continue;
+        }
+        if total <= max_width {
             if add_space {
                 cur.push(' ');
                 cur_len += 1;
@@ -528,11 +543,7 @@ fn render_wrap(
                 }
             }
 
-            let risky = atoms
-                .iter()
-                .skip(1)
-                .any(|(a, _)| starts_with_list_marker(a));
-            if risky || atoms.len() <= 1 {
+            if atoms.is_empty() {
                 if is_hardbreak {
                     out.push(line.to_string());
                 } else {
@@ -717,11 +728,7 @@ fn render_wrap(
             continue;
         }
 
-        let risky = unit_atoms
-            .iter()
-            .skip(1)
-            .any(|(a, _)| starts_with_list_marker(a));
-        if risky || unit_atoms.is_empty() {
+        if unit_atoms.is_empty() {
             for ln in &unit_lines {
                 let idx = ln - 1;
                 if idx >= lines.len() {
@@ -1041,6 +1048,45 @@ mod tests {
         let out = splice_format(&s, 80, false);
         assert_eq!(out, s, "multiline code span must not be split");
         html_eq(&s, &out);
+    }
+
+    #[test]
+    fn wrap_splits_despite_marker_like_words() {
+        let s = "- 1B: `serde-saphyr` pure-Rust (not `yaml_serde` rename). Accept MSRV bump + `Value` refactor.\n";
+        let out = splice_format(s, 80, true);
+        assert!(out.lines().count() > 1, "should wrap: {out:?}");
+        for line in out.lines() {
+            assert!(line.len() <= 80, "line too long: {} ({})", line, line.len());
+        }
+        for line in out.lines().skip(1) {
+            let t = line.trim_start();
+            assert!(
+                !starts_with_list_marker(t),
+                "continuation starts with marker: {:?}",
+                line
+            );
+        }
+        html_eq(s, &out);
+        assert_eq!(splice_format(&out, 80, true), out, "fixpoint");
+    }
+
+    #[test]
+    fn no_continuation_starts_with_marker() {
+        let s = "- alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau - upsilon phi chi psi omega end of line padding here\n";
+        let out = splice_format(s, 80, true);
+        for line in out.lines() {
+            assert!(line.len() <= 80, "line too long: {} ({})", line, line.len());
+        }
+        for line in out.lines().skip(1) {
+            let t = line.trim_start();
+            assert!(
+                !starts_with_list_marker(t),
+                "continuation starts with marker: {:?}",
+                line
+            );
+        }
+        html_eq(s, &out);
+        assert_eq!(splice_format(&out, 80, true), out, "fixpoint");
     }
 
     // ---- STEP 1 tests (worker 3) ----
