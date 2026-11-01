@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Linux ARM64 releases: tarball plus static `.deb`/`.rpm` alongside amd64
+- Static musl tarballs (`-musl` suffix) for pre-glibc-2.39 distributions
 
 ## [0.1.0] – 2026-11-01
 
