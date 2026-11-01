@@ -295,7 +295,7 @@ fn run(cli: Cli) -> Result<(), String> {
                     let entries = tablethat_lib::plan::store::sorted_md_entries(&p)?;
                     let mut errors: Vec<String> = Vec::new();
                     for entry in &entries {
-                        match tablethat_lib::plan::format::format_file(entry, 120) {
+                        match tablethat_lib::plan::format::format_file(entry, 80) {
                             Ok(true) => eprintln!("formatted {}", entry.display()),
                             Ok(false) => {}
                             Err(e) => errors.push(e),
@@ -306,7 +306,7 @@ fn run(cli: Cli) -> Result<(), String> {
                     }
                     Ok(())
                 } else if p.is_file() {
-                    match tablethat_lib::plan::format::format_file(&p, 120) {
+                    match tablethat_lib::plan::format::format_file(&p, 80) {
                         Ok(true) => {
                             eprintln!("formatted {}", p.display());
                             Ok(())

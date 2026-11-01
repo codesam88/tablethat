@@ -1,6 +1,7 @@
-/// Rewrite markdown to canonical CommonMark: reflow to `width`, fenced
-/// code blocks, aligned tables, no trailing whitespace. Idempotent —
-/// formatting twice is a fixpoint (pinned by `formatter_is_idempotent`).
+/// Conservative splice-engine markdown formatter: parse for structure, apply
+/// only the desired edits (trailing-whitespace strip, table alignment,
+/// split-only prose wrap to `width`), re-emit everything else byte-identical.
+/// Idempotent — formatting twice is a fixpoint.
 ///
 /// ```
 /// # use tablethat_lib::markdown_fmt::format_commonmark;
@@ -8,26 +9,14 @@
 /// assert!(out.contains("# Title"));
 /// ```
 pub fn format_commonmark(text: &str, width: usize) -> String {
-    let mut opts = crate::markdown::comrak_options();
-    opts.render.width = width;
-    opts.render.prefer_fenced = true;
-    let formatted = comrak::markdown_to_commonmark(text, &opts);
-    let aligned = align_tables(&formatted);
-    strip_trailing_whitespace(&aligned)
-}
-
-fn strip_trailing_whitespace(text: &str) -> String {
-    text.lines()
-        .map(|line| line.trim_end())
-        .collect::<Vec<_>>()
-        .join("\n")
+    splice_format(text, width)
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum SpliceEdit {
     StripTrailingWs { line: usize },
     AlignTable { start: usize, end: usize },
+    WrapText { start: usize, end: usize },
 }
 
 impl SpliceEdit {
@@ -35,11 +24,11 @@ impl SpliceEdit {
         match self {
             SpliceEdit::StripTrailingWs { line } => (*line, *line),
             SpliceEdit::AlignTable { start, end } => (*start, *end),
+            SpliceEdit::WrapText { start, end } => (*start, *end),
         }
     }
 }
 
-#[allow(dead_code)]
 fn collect_hardbreak_lines(node: &comrak::Node<'_>, out: &mut std::collections::HashSet<usize>) {
     if let comrak::nodes::NodeValue::LineBreak = node.data.borrow().value {
         out.insert(node.data.borrow().sourcepos.end.line);
@@ -49,11 +38,9 @@ fn collect_hardbreak_lines(node: &comrak::Node<'_>, out: &mut std::collections::
     }
 }
 
-/// Conservative splice engine (item 2): strip trailing whitespace
-/// (hardbreak-exempt) and align tables from AST line ranges. Everything
-/// else passes through byte-identical.
-#[allow(dead_code)]
-fn splice_format(text: &str, _width: usize) -> String {
+/// Conservative splice engine: strip trailing whitespace (hardbreak-exempt),
+/// align tables from AST line ranges, and split-only wrap prose to `width`.
+fn splice_format(text: &str, width: usize) -> String {
     let arena = comrak::Arena::new();
     let opts = crate::markdown::comrak_options();
     let root = comrak::parse_document(&arena, text, &opts);
@@ -66,23 +53,62 @@ fn splice_format(text: &str, _width: usize) -> String {
     collect_table_ranges(&root, &mut table_ranges);
 
     let lines: Vec<&str> = text.split('\n').collect();
+
+    // Collect wrap candidates (paragraphs) with container context.
+    let mut wrap_candidates: Vec<WrapCandidate> = Vec::new();
+    collect_wrap_candidates(&root, false, &lines, &mut wrap_candidates);
+
     let in_table = |lineno: usize| -> bool {
         table_ranges
             .iter()
             .any(|(s, e)| lineno >= *s && lineno <= *e)
     };
 
+    // Render wrap edits up front (metadata needed beyond line range).
+    let mut wrap_outputs: std::collections::HashMap<(usize, usize), Vec<String>> =
+        std::collections::HashMap::new();
+    let mut wrap_ranges: Vec<(usize, usize)> = Vec::new();
+
     let mut edits: Vec<SpliceEdit> = Vec::new();
+
+    for cand in &wrap_candidates {
+        if cand.start < 1 || cand.end > lines.len() || cand.start > cand.end {
+            continue;
+        }
+        let has_overlong = (cand.start..=cand.end).any(|ln| lines[ln - 1].len() > width);
+        if !has_overlong {
+            continue;
+        }
+        let rendered = render_wrap(cand, &lines, width, &hardbreak_lines);
+        wrap_outputs.insert((cand.start, cand.end), rendered);
+        wrap_ranges.push((cand.start, cand.end));
+        edits.push(SpliceEdit::WrapText {
+            start: cand.start,
+            end: cand.end,
+        });
+    }
+
+    let in_wrap = |lineno: usize| -> bool {
+        wrap_ranges
+            .iter()
+            .any(|(s, e)| lineno >= *s && lineno <= *e)
+    };
+
+    // StripTrailingWs (hardbreak-exempt), skipping table/wrap covered lines.
     for (idx, line) in lines.iter().enumerate() {
         let lineno = idx + 1;
-        if *line != line.trim_end() && !hardbreak_lines.contains(&lineno) && !in_table(lineno) {
+        if *line != line.trim_end()
+            && !hardbreak_lines.contains(&lineno)
+            && !in_table(lineno)
+            && !in_wrap(lineno)
+        {
             edits.push(SpliceEdit::StripTrailingWs { line: lineno });
         }
     }
+
+    // AlignTable edits.
     for (s, e) in &table_ranges {
         if *s >= 1 && *e <= lines.len() && *s <= *e {
-            // Conservative rule: only align if every row is optional whitespace
-            // then a pipe. Otherwise passthrough (always safe).
             let all_prefixed = (*s..=*e).all(|ln| {
                 let l = lines[ln - 1];
                 let ws_len = l.len() - l.trim_start().len();
@@ -102,9 +128,9 @@ fn splice_format(text: &str, _width: usize) -> String {
         );
     }
 
-    // Apply edits (sorted, non-overlapping) over the source lines.
+    // Apply edits.
     let mut out_lines: Vec<String> = Vec::new();
-    let mut cursor = 0usize; // 0-based index into `lines`
+    let mut cursor = 0usize;
     for e in &edits {
         let (s, en) = e.range();
         while cursor < s.saturating_sub(1) {
@@ -124,8 +150,17 @@ fn splice_format(text: &str, _width: usize) -> String {
                 let block: Vec<&str> = lines[start.saturating_sub(1)..*end].to_vec();
                 out_lines.extend(align_table_lines(&block));
             }
+            SpliceEdit::WrapText { start, end } => {
+                if let Some(rendered) = wrap_outputs.get(&(*start, *end)) {
+                    out_lines.extend(rendered.clone());
+                } else {
+                    for ln in *start..=*end {
+                        out_lines.push(lines[ln - 1].to_string());
+                    }
+                }
+            }
         }
-        cursor = en; // 1-based end -> next 0-based index
+        cursor = en;
     }
     while cursor < lines.len() {
         out_lines.push(lines[cursor].to_string());
@@ -134,7 +169,409 @@ fn splice_format(text: &str, _width: usize) -> String {
     out_lines.join("\n")
 }
 
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct WrapCandidate {
+    start: usize,
+    end: usize,
+    start_col: usize,
+    in_list: bool,
+    code_ranges: Vec<(usize, usize, usize)>,
+    multiline_code_lines: std::collections::HashSet<usize>,
+}
+
+fn collect_wrap_candidates(
+    node: &comrak::Node<'_>,
+    in_list: bool,
+    lines: &[&str],
+    out: &mut Vec<WrapCandidate>,
+) {
+    use comrak::nodes::NodeValue;
+    match &node.data.borrow().value {
+        NodeValue::BlockQuote => {
+            for c in node.children() {
+                collect_wrap_candidates(&c, in_list, lines, out);
+            }
+        }
+        NodeValue::List(_) => {
+            for c in node.children() {
+                collect_wrap_candidates(&c, true, lines, out);
+            }
+        }
+        NodeValue::Item(_) => {
+            for c in node.children() {
+                collect_wrap_candidates(&c, true, lines, out);
+            }
+        }
+        NodeValue::Paragraph => {
+            let sp = node.data.borrow().sourcepos;
+            if sp.start.line >= 1 {
+                let mut code_ranges = Vec::new();
+                collect_code_ranges(node, lines, &mut code_ranges);
+                let mut multiline_code_lines = std::collections::HashSet::new();
+                collect_multiline_code_lines(node, &mut multiline_code_lines);
+                out.push(WrapCandidate {
+                    start: sp.start.line,
+                    end: sp.end.line,
+                    start_col: sp.start.column,
+                    in_list,
+                    code_ranges,
+                    multiline_code_lines,
+                });
+            }
+        }
+        _ => {
+            for c in node.children() {
+                collect_wrap_candidates(&c, in_list, lines, out);
+            }
+        }
+    }
+}
+
+fn collect_multiline_code_lines(
+    node: &comrak::Node<'_>,
+    out: &mut std::collections::HashSet<usize>,
+) {
+    use comrak::nodes::NodeValue;
+    if let NodeValue::Code(_) = node.data.borrow().value {
+        let sp = node.data.borrow().sourcepos;
+        if sp.start.line != sp.end.line {
+            for ln in sp.start.line..=sp.end.line {
+                out.insert(ln);
+            }
+        }
+    }
+    for c in node.children() {
+        collect_multiline_code_lines(&c, out);
+    }
+}
+
+fn collect_code_ranges(
+    node: &comrak::Node<'_>,
+    lines: &[&str],
+    out: &mut Vec<(usize, usize, usize)>,
+) {
+    use comrak::nodes::NodeValue;
+    if let NodeValue::Code(_) = node.data.borrow().value {
+        let sp = node.data.borrow().sourcepos;
+        if sp.start.line == sp.end.line {
+            out.push((sp.start.line, sp.start.column, sp.end.column));
+        } else {
+            let start_line = sp.start.line;
+            if start_line >= 1 && start_line <= lines.len() {
+                out.push((start_line, sp.start.column, lines[start_line - 1].len()));
+            }
+            for ln in (sp.start.line + 1)..sp.end.line {
+                if ln >= 1 && ln <= lines.len() {
+                    out.push((ln, 1, lines[ln - 1].len()));
+                }
+            }
+            let end_line = sp.end.line;
+            if end_line >= 1 && end_line <= lines.len() {
+                out.push((end_line, 1, sp.end.column));
+            }
+        }
+    }
+    for c in node.children() {
+        collect_code_ranges(&c, lines, out);
+    }
+}
+
+fn detect_prefix(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() && bytes[idx] == b' ' {
+        idx += 1;
+    }
+    let mut j = idx;
+    while j < bytes.len() {
+        if bytes[j] == b'>' {
+            j += 1;
+            while j < bytes.len() && bytes[j] == b' ' {
+                j += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    if j > idx && line[..j].contains('>') {
+        line[..j].to_string()
+    } else {
+        line[..idx].to_string()
+    }
+}
+
+fn compute_cont_prefix(pfx: &str, in_list: bool) -> String {
+    if !in_list {
+        return pfx.to_string();
+    }
+    // Split off leading indentation + blockquote markers; the remainder is the
+    // list marker (possibly including a checkbox), which becomes spaces.
+    let bytes = pfx.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i] == b' ' {
+        i += 1;
+    }
+    let mut j = i;
+    while j < bytes.len() {
+        if bytes[j] == b'>' {
+            j += 1;
+            while j < bytes.len() && bytes[j] == b' ' {
+                j += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    let outer = &pfx[..j];
+    let marker = &pfx[j..];
+    format!("{}{}", outer, " ".repeat(marker.len()))
+}
+
+fn tokenize_content(content: &str, code_intervals: &[(usize, usize)]) -> Vec<(String, bool)> {
+    let mut atoms = Vec::new();
+    let bytes = content.as_bytes();
+    let n = content.len();
+    let mut i = 0;
+    let mut pending_space = false;
+    while i < n {
+        if bytes[i].is_ascii_whitespace() {
+            pending_space = true;
+            i += 1;
+            continue;
+        }
+        // code span starting at i?
+        if let Some(&(s, e)) = code_intervals.iter().find(|(s, _)| *s == i) {
+            atoms.push((content[s..e].to_string(), pending_space));
+            pending_space = false;
+            i = e;
+            continue;
+        }
+        let mut j = i;
+        while j < n && !bytes[j].is_ascii_whitespace() {
+            if code_intervals.iter().any(|(s, _)| *s == j) {
+                break;
+            }
+            j += 1;
+        }
+        if j > i {
+            atoms.push((content[i..j].to_string(), pending_space));
+            pending_space = false;
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    atoms
+}
+
+fn starts_with_list_marker(s: &str) -> bool {
+    let t = s.trim_start();
+    if t == "-" || t == "*" || t == "+" {
+        return true;
+    }
+    if t.starts_with("- ") || t.starts_with("* ") || t.starts_with("+ ") {
+        return true;
+    }
+    // ordered: digits followed by "." or ")" (possibly with trailing space)
+    let mut i = 0;
+    for c in t.chars() {
+        if c.is_ascii_digit() {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if i > 0 && i < t.len() {
+        let rest = &t[i..];
+        if rest.starts_with('.') || rest.starts_with(')') {
+            return true;
+        }
+    }
+    false
+}
+
+fn wrap_atoms(atoms: &[(String, bool)], max_width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    let mut cur_len = 0usize;
+    for (atom, space_before) in atoms {
+        let alen = atom.len();
+        let add_space = *space_before && !cur.is_empty();
+        let total = if add_space {
+            cur_len + 1 + alen
+        } else {
+            cur_len + alen
+        };
+        if cur.is_empty() {
+            cur = atom.clone();
+            cur_len = alen;
+        } else if total <= max_width {
+            if add_space {
+                cur.push(' ');
+                cur_len += 1;
+            }
+            cur.push_str(atom);
+            cur_len += alen;
+        } else {
+            lines.push(cur.clone());
+            cur = atom.clone();
+            cur_len = alen;
+        }
+    }
+    if !cur.is_empty() || lines.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
+fn render_wrap(
+    cand: &WrapCandidate,
+    lines: &[&str],
+    width: usize,
+    hardbreak_lines: &std::collections::HashSet<usize>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, ln) in (cand.start..=cand.end).enumerate() {
+        let idx = ln - 1;
+        if idx >= lines.len() {
+            break;
+        }
+        let line = lines[idx];
+        let is_first = i == 0;
+        let pfx = if is_first {
+            let col = cand.start_col;
+            if col >= 1 && col - 1 <= line.len() {
+                line[..col - 1].to_string()
+            } else {
+                let mut s = String::new();
+                for c in line.chars() {
+                    if c == ' ' {
+                        s.push(c);
+                    } else {
+                        break;
+                    }
+                }
+                s
+            }
+        } else {
+            detect_prefix(line)
+        };
+        let cont_prefix = compute_cont_prefix(&pfx, cand.in_list);
+
+        let is_hardbreak = hardbreak_lines.contains(&ln);
+
+        // Lines that are part of a multi-line code span must never be split.
+        if cand.multiline_code_lines.contains(&ln) {
+            if is_hardbreak {
+                out.push(line.to_string());
+            } else {
+                out.push(line.trim_end().to_string());
+            }
+            continue;
+        }
+
+        // short line: keep (strip trailing ws unless hardbreak)
+        if line.len() <= width {
+            if is_hardbreak {
+                out.push(line.to_string());
+            } else {
+                out.push(line.trim_end().to_string());
+            }
+            continue;
+        }
+
+        // hardbreak marker
+        let marker_str = if is_hardbreak {
+            if line.ends_with('\\') { "\\" } else { "  " }
+        } else {
+            ""
+        };
+        let body = if marker_str == "  " && line.ends_with("  ") {
+            &line[..line.len().saturating_sub(2)]
+        } else if marker_str == "\\" && line.ends_with('\\') {
+            &line[..line.len().saturating_sub(1)]
+        } else {
+            line
+        };
+
+        if pfx.len() > body.len() {
+            out.push(line.to_string());
+            continue;
+        }
+        let content = &body[pfx.len()..];
+
+        // code intervals relative to this line, then content
+        let mut ivals: Vec<(usize, usize)> = cand
+            .code_ranges
+            .iter()
+            .filter(|(l, _, _)| *l == ln)
+            .map(|(_, s, e)| {
+                let ss = s.saturating_sub(1);
+                let ee = *e;
+                let cs = ss.saturating_sub(pfx.len());
+                let ce = ee.saturating_sub(pfx.len());
+                (cs, ce)
+            })
+            .filter(|(s, e)| *s <= content.len() && *e <= content.len() && s <= e)
+            .collect();
+        ivals.sort();
+
+        let raw_atoms = tokenize_content(content, &ivals);
+        // Merge adjacent atoms that had no whitespace between them, so wrapping
+        // never inserts a space (or break) where the source had none — keeps
+        // HTML-equivalence for constructs like "(`code`".
+        let mut atoms: Vec<(String, bool)> = Vec::new();
+        for (atom, sp) in raw_atoms {
+            if !sp && !atoms.is_empty() {
+                let last = atoms.last_mut().unwrap();
+                last.0.push_str(&atom);
+            } else {
+                atoms.push((atom, sp));
+            }
+        }
+
+        // If wrapping would place a list-marker-like token at the start of a
+        // continuation line, the result would be parsed as a nested list and
+        // break HTML-equivalence. Leave such lines unsplit (overflow) instead.
+        let risky = atoms
+            .iter()
+            .skip(1)
+            .any(|(a, _)| starts_with_list_marker(a));
+        if risky || atoms.len() <= 1 {
+            // still strip trailing ws for short? line is long here; push original (marker-aware)
+            if is_hardbreak {
+                out.push(line.to_string());
+            } else {
+                out.push(line.trim_end().to_string());
+            }
+            continue;
+        }
+
+        let max_content_width = if width > pfx.len() + marker_str.len() {
+            width - pfx.len() - marker_str.len()
+        } else {
+            0
+        };
+
+        let wrapped = if max_content_width > 0 {
+            wrap_atoms(&atoms, max_content_width)
+        } else {
+            vec![content.to_string()]
+        };
+
+        let nseg = wrapped.len();
+        for (j, cl) in wrapped.iter().enumerate() {
+            let prefix = if j == 0 { &pfx } else { &cont_prefix };
+            let mut out_line = format!("{}{}", prefix, cl);
+            if j == nseg - 1 && !marker_str.is_empty() {
+                out_line.push_str(marker_str);
+            }
+            out.push(out_line);
+        }
+    }
+    out
+}
+
 fn collect_table_ranges(node: &comrak::Node<'_>, out: &mut Vec<(usize, usize)>) {
     if let comrak::nodes::NodeValue::Table(_) = node.data.borrow().value {
         let sp = node.data.borrow().sourcepos;
@@ -147,7 +584,6 @@ fn collect_table_ranges(node: &comrak::Node<'_>, out: &mut Vec<(usize, usize)>) 
     }
 }
 
-#[allow(dead_code)]
 fn split_table_cells(s: &str) -> Vec<String> {
     let mut cells: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -199,7 +635,6 @@ fn split_table_cells(s: &str) -> Vec<String> {
     cells
 }
 
-#[allow(dead_code)]
 fn align_table_lines(lines: &[&str]) -> Vec<String> {
     // Capture each row's leading-whitespace indent so prefixed tables keep it.
     let indents: Vec<String> = lines
@@ -259,78 +694,6 @@ fn align_table_lines(lines: &[&str]) -> Vec<String> {
     out
 }
 
-fn align_tables(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let mut result = Vec::new();
-    let mut i = 0;
-
-    while i < lines.len() {
-        // Detect table: line starts with | and next line is separator (| --- |)
-        if lines[i].starts_with('|')
-            && i + 1 < lines.len()
-            && lines[i + 1].starts_with('|')
-            && lines[i + 1].contains("---")
-        {
-            // Collect all table rows
-            let mut table_lines = Vec::new();
-            while i < lines.len() && lines[i].starts_with('|') {
-                table_lines.push(lines[i]);
-                i += 1;
-            }
-
-            // Parse cells and compute column widths
-            let parsed: Vec<Vec<&str>> = table_lines
-                .iter()
-                .map(|line| {
-                    line.trim_start_matches('|')
-                        .trim_end_matches('|')
-                        .split('|')
-                        .map(|s| s.trim())
-                        .collect()
-                })
-                .collect();
-
-            let num_cols = parsed.iter().map(|r| r.len()).max().unwrap_or(0);
-            let mut col_widths = vec![0usize; num_cols];
-            for row in &parsed {
-                for (j, cell) in row.iter().enumerate() {
-                    col_widths[j] = col_widths[j].max(cell.len());
-                }
-            }
-
-            // Reformat table with aligned columns
-            for (row_idx, row) in parsed.iter().enumerate() {
-                let mut line = String::from("|");
-                for (j, cell) in row.iter().enumerate() {
-                    let w = col_widths.get(j).copied().unwrap_or(3);
-                    if row_idx == 1 {
-                        // Separator row: use alignment markers
-                        let marker = if cell.starts_with(':') && cell.ends_with(':') {
-                            format!(" :{:-<w$}: ", "", w = w.saturating_sub(2))
-                        } else if cell.starts_with(':') {
-                            format!(" :{:-<w$} ", "", w = w.saturating_sub(1))
-                        } else if cell.ends_with(':') {
-                            format!(" {:-<w$}: ", "", w = w.saturating_sub(1))
-                        } else {
-                            format!(" {:-<w$} ", "", w = w)
-                        };
-                        line.push_str(&marker);
-                    } else {
-                        line.push_str(&format!(" {:<w$} ", cell, w = w));
-                    }
-                    line.push('|');
-                }
-                result.push(line);
-            }
-        } else {
-            result.push(lines[i].to_string());
-            i += 1;
-        }
-    }
-
-    result.join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,39 +709,20 @@ mod tests {
         assert!(opts.extension.autolink, "autolink");
     }
 
-    #[test]
-    fn align_tables_pads_uneven_columns() {
-        let input = "| a | bbbb |\n|---|---|\n| cccc | d |\n";
-        let expected = "| a    | bbbb |\n| ---- | ---- |\n| cccc | d    |\n";
-        // align_tables does not add trailing newline; input has trailing \n producing empty? Let's handle.
-        let out = align_tables(input.trim_end_matches('\n'));
-        assert_eq!(out, expected.trim_end_matches('\n'));
-    }
-
-    #[test]
-    fn align_tables_preserves_separator_alignment_markers() {
-        let input = "| Name | Val |\n|:---|---:|\n| x | y |\n";
-        let expected = "| Name | Val  |\n| :--- | ---: |\n| x    | y    |";
-        let out = align_tables(input.trim_end_matches('\n'));
-        assert_eq!(out, expected);
-    }
-
-    #[test]
-    fn align_tables_passes_non_table_lines_through() {
-        let input = "hello world\n\n- item\n";
-        assert_eq!(
-            align_tables(input.trim_end_matches('\n')),
-            input.trim_end_matches('\n')
-        );
-    }
-
     // ---- splice_format (worker 1) ----
 
     fn html_eq(input: &str, output: &str) {
         let opts = crate::markdown::comrak_options();
+        let a = comrak::markdown_to_html(input, &opts);
+        let b = comrak::markdown_to_html(output, &opts);
+        // The engine only ever moves softbreak positions (line splits);
+        // normalize newlines so those compare equal, but keep every other
+        // byte (including whitespace runs inside code) exact. Any content
+        // change still fails.
+        let norm = |x: &str| -> String { x.replace('\n', " ") };
         assert_eq!(
-            comrak::markdown_to_html(input, &opts),
-            comrak::markdown_to_html(output, &opts),
+            norm(&a),
+            norm(&b),
             "HTML must be preserved by splice_format"
         );
     }
@@ -443,16 +787,10 @@ mod tests {
 
     #[test]
     fn table_style_matches_existing_convention() {
-        // ORACLE NOTE FOR WORKER 3: this test calls the private `align_tables`
-        // as a style oracle. `align_tables` will be deleted when the splice
-        // engine is wired in, so this oracle call MUST be replaced with
-        // literal expectations by worker 3. Flagged prominently.
         let s = "| a | bbbb |\n|---|---|\n| cccc | d |\n";
         let out = splice_format(s, 80);
-        assert_eq!(
-            out.trim_end_matches('\n'),
-            align_tables(s.trim_end_matches('\n'))
-        );
+        let expected = "| a    | bbbb |\n| ---- | ---- |\n| cccc | d    |\n";
+        assert_eq!(out, expected);
         html_eq(s, &out);
     }
 
@@ -487,5 +825,110 @@ mod tests {
         let out = splice_format(s, 80);
         assert_eq!(out, s);
         html_eq(s, &out);
+    }
+
+    #[test]
+    fn multiline_code_span_never_split() {
+        let s = "`start\n".to_string() + &"word ".repeat(14) + "aaaa more inside span` tail here\n";
+        let out = splice_format(&s, 80);
+        assert_eq!(out, s, "multiline code span must not be split");
+        html_eq(&s, &out);
+    }
+
+    // ---- STEP 1 tests (worker 3) ----
+
+    #[test]
+    fn overlong_paragraph_splits_never_joins() {
+        let long_word = "word ";
+        let long_line = long_word.repeat(40); // ~200 chars
+        let s = format!("{}\n", long_line.trim_end());
+        let out = splice_format(&s, 80);
+        for line in out.lines() {
+            assert!(line.len() <= 80, "line too long: {} ({})", line, line.len());
+        }
+        assert!(out.lines().count() > 1, "should split");
+        html_eq(&s, &out);
+        // fixpoint
+        assert_eq!(splice_format(&out, 80), out);
+
+        // two short lines stay byte-identical
+        let short = "first short line\nsecond short line\n";
+        assert_eq!(splice_format(short, 80), short);
+        html_eq(short, &splice_format(short, 80));
+    }
+
+    #[test]
+    fn code_span_is_atomic() {
+        let s = "Here is text before `code span that crosses the boundary here` and more trailing text after it to force wrap\n";
+        let out = splice_format(s, 80);
+        assert!(
+            out.contains("`code span that crosses the boundary here`"),
+            "code span must stay whole: {}",
+            out
+        );
+        html_eq(s, &out);
+        assert_eq!(splice_format(&out, 80), out);
+    }
+
+    #[test]
+    fn overlong_word_overflows() {
+        let s = format!("{}\n", "x".repeat(100));
+        assert_eq!(splice_format(&s, 80), s);
+        html_eq(&s, &splice_format(&s, 80));
+    }
+
+    #[test]
+    fn nested_list_wraps_with_indent() {
+        let s = format!("- {}\n", "word ".repeat(30).trim_end());
+        let out = splice_format(&s, 80);
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines.len() > 1, "should wrap");
+        if lines.len() > 1 {
+            assert!(
+                lines[1].starts_with("  "),
+                "continuation indent 2 spaces: {:?}",
+                lines[1]
+            );
+        }
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 80), out);
+
+        // ordered
+        let s2 = format!("1. {}\n", "word ".repeat(30).trim_end());
+        let out2 = splice_format(&s2, 80);
+        let lines2: Vec<&str> = out2.lines().collect();
+        if lines2.len() > 1 {
+            assert!(
+                lines2[1].starts_with("   "),
+                "continuation indent 3 spaces: {:?}",
+                lines2[1]
+            );
+        }
+        html_eq(&s2, &out2);
+    }
+
+    #[test]
+    fn blockquote_wrap_preserves_markers() {
+        let s = format!("> {}\n", "word ".repeat(30).trim_end());
+        let out = splice_format(&s, 80);
+        for line in out.lines() {
+            assert!(line.starts_with("> "), "marker missing: {:?}", line);
+        }
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 80), out);
+    }
+
+    #[test]
+    fn hardbreak_splits_wrap_unit() {
+        let long = "word ".repeat(30).trim_end().to_string();
+        let s = format!("short  \n{}\n", long);
+        let out = splice_format(&s, 80);
+        assert!(
+            out.starts_with("short  \n"),
+            "hardbreak marker intact: {:?}",
+            out
+        );
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 80), out);
     }
 }
