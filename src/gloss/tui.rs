@@ -12,6 +12,31 @@ use ratatui::{
 };
 use std::path::{Path, PathBuf};
 
+/// Style for one scrollbar row: search matches first — the current match
+/// uses the current-highlight style, other matches the match style —
+/// else thumb or track, both the status bar font color (glyph, not hue,
+/// separates them so the chrome reads as one quiet element).
+fn scrollbar_row_style(app: &App, row: usize, track_h: usize) -> Style {
+    let content_len = app.content.len();
+    if track_h > 0 && !app.search_hits.is_empty() {
+        let start = row.saturating_mul(content_len) / track_h;
+        let end = ((row + 1).saturating_mul(content_len) / track_h).min(content_len);
+        let is_current = app
+            .search_hits
+            .get(app.search_index)
+            .is_some_and(|c| *c >= start && *c < end);
+        if is_current {
+            return app.highlight_current_style;
+        }
+        if app.search_hits.iter().any(|h| *h >= start && *h < end) {
+            return app.highlight_style;
+        }
+    }
+    // Thumb and track share the status bar font color; the caller picks
+    // the glyph (█ vs │) from the thumb range to separate them.
+    Style::default().fg(Color::DarkGray)
+}
+
 /// Visible-window thumb as a row range within a `track_h`-tall scrollbar.
 /// Exact at both ends (0 at top, `track_h` at bottom); proportional in
 /// between. `scroll` is clamped defensively; a fitting viewport fills all.
@@ -426,21 +451,16 @@ fn render(frame: &mut Frame, app: &mut App) {
     );
 
     if show_bar {
-        let (thumb_start, thumb_end) = thumb_range(
-            app.content.len(),
-            app.viewport_height,
-            app.scroll,
-            body_area.height as usize,
-        );
-        let track = Style::default().fg(Color::DarkGray);
-        let thumb = Style::default().fg(Color::Gray);
+        let track_h = body_area.height as usize;
+        let thumb = thumb_range(app.content.len(), app.viewport_height, app.scroll, track_h);
         let bar: Vec<Line> = (0..body_area.height)
             .map(|row| {
-                let (glyph, style) = if (row as usize) >= thumb_start && (row as usize) < thumb_end
-                {
-                    ("█", thumb)
+                let row = row as usize;
+                let style = scrollbar_row_style(app, row, track_h);
+                let glyph = if row >= thumb.0 && row < thumb.1 {
+                    "█"
                 } else {
-                    ("│", track)
+                    "│"
                 };
                 Line::from(Span::styled(glyph, style))
             })
@@ -690,11 +710,61 @@ mod scrollbar_tests {
     fn thumb_fills_track_when_content_fits() {
         assert_eq!(thumb_range(10, 20, 0, 10), (0, 10));
     }
-
     #[test]
     fn thumb_has_minimum_size_and_clamps_scroll() {
         assert_eq!(thumb_range(1000, 5, 500, 10), (4, 5));
         assert_eq!(thumb_range(100, 20, 999, 10), (8, 10));
         assert_eq!(thumb_range(100, 20, 0, 0), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod scrollbar_search_tests {
+    use super::*;
+
+    fn plain_lines(n: usize) -> Vec<Line<'static>> {
+        (0..n).map(|_| Line::from("x")).collect()
+    }
+
+    fn app_with_search(content_len: usize, hits: Vec<usize>, current: usize) -> App {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true);
+        app.content = plain_lines(content_len);
+        app.search_hits = hits;
+        app.search_index = current;
+        app.viewport_height = 20;
+        app.scroll = 0;
+        app
+    }
+
+    #[test]
+    fn match_row_uses_match_style() {
+        let app = app_with_search(100, vec![10, 50], 0);
+        let got = scrollbar_row_style(&app, 5, 10);
+        assert_eq!(got, app.highlight_style);
+    }
+
+    #[test]
+    fn current_match_row_uses_current_style() {
+        let app = app_with_search(100, vec![20, 50], 1);
+        assert_eq!(
+            scrollbar_row_style(&app, 5, 10),
+            app.highlight_current_style
+        );
+        assert_eq!(scrollbar_row_style(&app, 2, 10), app.highlight_style);
+    }
+
+    #[test]
+    fn non_match_rows_use_status_bar_color() {
+        let app = app_with_search(100, vec![10, 50], 0);
+        let want = Style::default().fg(Color::DarkGray);
+        assert_eq!(scrollbar_row_style(&app, 0, 10), want);
+        assert_eq!(scrollbar_row_style(&app, 5, 10), app.highlight_style);
+    }
+
+    #[test]
+    fn no_hits_means_no_markers() {
+        let app = app_with_search(100, vec![], 0);
+        let track = Style::default().fg(Color::DarkGray);
+        assert_eq!(scrollbar_row_style(&app, 5, 10), track);
     }
 }
