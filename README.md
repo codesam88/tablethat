@@ -33,6 +33,12 @@ default directories (typically `~/.cargo/bin/` and `~/.config/{plan,gloss}/`).
     cargo plan kanban        # browse local project's tasks
     cargo gloss README.md    # view README.md
 
+### From a release tarball (no Rust needed)
+
+    tar xzf tablethat-<target>.tar.gz && cd tablethat
+    sudo make install        # PREFIX=/usr/local, DESTDIR supported
+    sudo make uninstall      # removes exactly what install added
+
 ### Development
 
     just setup-dev           # installs audit tools + enables the pre-commit hook

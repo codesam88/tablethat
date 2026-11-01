@@ -82,6 +82,7 @@ jobs:
           cp target/${{ matrix.target }}/release/plan target/${{ matrix.target }}/release/gloss pkg/tablethat/
           cp README.md LICENSE-MIT LICENSE-APACHE plan.toml.example pkg/tablethat/
           cp -r themes pkg/tablethat/
+          cp packaging/Makefile pkg/tablethat/
           tar czf tablethat-${{ matrix.target }}.tar.gz -C pkg tablethat
 
       - name: Upload artifact
