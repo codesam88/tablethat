@@ -78,9 +78,11 @@ jobs:
 
       - name: Package (unix)
         run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../tablethat-${{ matrix.target }}.tar.gz plan gloss
-          cd ../../..
+          rm -rf pkg && mkdir -p pkg/tablethat
+          cp target/${{ matrix.target }}/release/plan target/${{ matrix.target }}/release/gloss pkg/tablethat/
+          cp README.md LICENSE-MIT LICENSE-APACHE plan.toml.example pkg/tablethat/
+          cp -r themes pkg/tablethat/
+          tar czf tablethat-${{ matrix.target }}.tar.gz -C pkg tablethat
 
       - name: Upload artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
