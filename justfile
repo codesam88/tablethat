@@ -68,7 +68,7 @@ uninstall:
     @rm -f ~/.config/plan/themes/*.toml ~/.config/gloss/themes/*.toml
     @echo "Removed binaries and themes"
 
-# install cargo-deny + cargo-audit (zizmor runs via uvx, no install)
+# install cargo-deny + cargo-audit
 install-dev:
     cargo install cargo-deny cargo-audit
 
