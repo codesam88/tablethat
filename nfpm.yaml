@@ -3,7 +3,7 @@
 name: tablethat
 arch: amd64
 platform: linux
-version: ${VERSION:?tablethat release version, e.g. 0.1.0}
+version: ${VERSION}
 section: utils
 priority: optional
 maintainer: codesam <tedsamhain@gmail.com>
