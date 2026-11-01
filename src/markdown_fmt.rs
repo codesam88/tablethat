@@ -1,5 +1,3 @@
-use comrak::Options;
-
 /// Rewrite markdown to canonical CommonMark: reflow to `width`, fenced
 /// code blocks, aligned tables, no trailing whitespace. Idempotent —
 /// formatting twice is a fixpoint (pinned by `formatter_is_idempotent`).
@@ -10,11 +8,7 @@ use comrak::Options;
 /// assert!(out.contains("# Title"));
 /// ```
 pub fn format_commonmark(text: &str, width: usize) -> String {
-    let mut opts = Options::default();
-    opts.extension.table = true;
-    opts.extension.tasklist = true;
-    opts.extension.strikethrough = true;
-    opts.extension.autolink = true;
+    let mut opts = crate::markdown::comrak_options();
     opts.render.width = width;
     opts.render.prefer_fenced = true;
     let formatted = comrak::markdown_to_commonmark(text, &opts);
@@ -104,6 +98,17 @@ fn align_tables(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formatter_shares_renderer_extension_set() {
+        // One constructor for both paths: renderer and formatter must never
+        // drift on extensions (table/tasklist/strikethrough/autolink).
+        let opts = crate::markdown::comrak_options();
+        assert!(opts.extension.table, "table");
+        assert!(opts.extension.tasklist, "tasklist");
+        assert!(opts.extension.strikethrough, "strikethrough");
+        assert!(opts.extension.autolink, "autolink");
+    }
 
     #[test]
     fn align_tables_pads_uneven_columns() {
