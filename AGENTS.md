@@ -22,6 +22,12 @@ Enable pre-commit hook: `git config core.hooksPath .githooks`
 
 **Run order matters**: `just check` before `just test`. The pre-commit hook runs both via `just precommit`.
 
+## Git / PR workflow
+
+- **PR-based flow on protected `main`**: do work on a branch, push, open a PR, report checks green, then stop.
+- **NEVER merge a PR without an explicit user prompt.** Not on green checks, not with `--admin`, not ever. Merging is the user's decision.
+- Same rule for other irreversible actions: never push tags, retag, publish to crates.io, or force-push without an explicit prompt.
+
 ## Running a single test
 
 ```bash
