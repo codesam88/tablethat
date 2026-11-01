@@ -421,10 +421,42 @@ fn would_start_block(s: &str) -> bool {
         return true;
     }
 
-    // Thematic break: exactly `---`, `***`, or `___` (possibly with spaces).
+    // Thematic break or setext underline: exactly `---`, `***`, `___`
+    // (possibly with spaces), or exactly `===`.
     let stripped_spaces: String = t.chars().filter(|c| *c != ' ').collect();
-    if stripped_spaces == "---" || stripped_spaces == "***" || stripped_spaces == "___" {
+    if stripped_spaces == "---"
+        || stripped_spaces == "***"
+        || stripped_spaces == "___"
+        || stripped_spaces == "==="
+    {
         return true;
+    }
+
+    // HTML block openers that can interrupt a paragraph (CommonMark):
+    // `<` + letter (open tag), `</` + letter, `<!--`, `<?`, `<!` + letter.
+    if let Some(after_lt) = t.strip_prefix('<') {
+        let mut chars = after_lt.chars();
+        match chars.next() {
+            Some('/') => {
+                if chars.next().is_some_and(|c| c.is_ascii_alphabetic()) {
+                    return true;
+                }
+            }
+            Some('!') => {
+                if let Some(after_bang) = after_lt.strip_prefix('!')
+                    && (after_bang.starts_with("--")
+                        || after_bang
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_ascii_alphabetic()))
+                {
+                    return true;
+                }
+            }
+            Some('?') => return true,
+            Some(c) if c.is_ascii_alphabetic() => return true,
+            _ => {}
+        }
     }
 
     // Link reference definition shape: `[label]:`.
@@ -441,46 +473,45 @@ fn would_start_block(s: &str) -> bool {
 }
 
 fn wrap_atoms(atoms: &[(String, bool)], max_width: usize) -> Vec<String> {
+    // Group atoms into chunks: a marker-like atom joins the preceding chunk,
+    // so breaks (which fall only between chunks) never place one at a
+    // continuation start. The previous word moves with it, keeping every
+    // line within width instead of overflowing the marker's line.
+    let mut chunks: Vec<(String, usize, bool)> = Vec::new(); // (text, len, space_before)
+    for (i, (atom, space_before)) in atoms.iter().enumerate() {
+        if i == 0 || !would_start_block(atom) {
+            chunks.push((atom.clone(), atom.len(), *space_before));
+        } else if let Some((text, len, _)) = chunks.last_mut() {
+            if *space_before {
+                text.push(' ');
+                *len += 1;
+            }
+            text.push_str(atom);
+            *len += atom.len();
+        }
+    }
     let mut lines = Vec::new();
     let mut cur = String::new();
     let mut cur_len = 0usize;
-    for (atom, space_before) in atoms {
-        let alen = atom.len();
-        let add_space = *space_before && !cur.is_empty();
-        let total = if add_space {
-            cur_len + 1 + alen
-        } else {
-            cur_len + alen
-        };
-        let marker_like = would_start_block(atom);
-        if cur.is_empty() {
+    for (idx, (text, len, space_before)) in chunks.iter().enumerate() {
+        if idx == 0 {
             // First output line keeps the source prefix and is safe.
-            cur = atom.clone();
-            cur_len = alen;
+            cur = text.clone();
+            cur_len = *len;
             continue;
         }
-        if marker_like {
-            // Never start a continuation line with a marker-like token: glue
-            // it onto the current line even if that overflows slightly.
-            if add_space {
-                cur.push(' ');
-                cur_len += 1;
-            }
-            cur.push_str(atom);
-            cur_len += alen;
-            continue;
-        }
+        let total = cur_len + (*space_before as usize) + len;
         if total <= max_width {
-            if add_space {
+            if *space_before {
                 cur.push(' ');
                 cur_len += 1;
             }
-            cur.push_str(atom);
-            cur_len += alen;
+            cur.push_str(text);
+            cur_len += len;
         } else {
-            lines.push(cur.clone());
-            cur = atom.clone();
-            cur_len = alen;
+            lines.push(std::mem::take(&mut cur));
+            cur = text.clone();
+            cur_len = *len;
         }
     }
     if !cur.is_empty() || lines.is_empty() {
@@ -1101,6 +1132,49 @@ mod tests {
     }
 
     #[test]
+    fn wrap_breaks_before_word_preceding_marker() {
+        // 13×"aa" = 38 cols; "+" would glue-overflow to 40 at width 39.
+        // Break before the preceding word instead: every line stays ≤ 39.
+        let s = format!(
+            "{} + rest words here to fill the line out further along\n",
+            vec!["aa"; 13].join(" ")
+        );
+        let out = splice_format(&s, 39, true);
+        for line in out.lines() {
+            assert!(line.len() <= 39, "line too long: {line:?}");
+        }
+        for line in out.lines().skip(1) {
+            assert!(
+                !would_start_block(line.trim_start()),
+                "continuation starts with marker: {line:?}"
+            );
+        }
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 39, true), out, "fixpoint");
+    }
+
+    #[test]
+    fn wrap_atoms_keep_width_with_marker_like() {
+        // Direct unit pin: "+" must join the FOLLOWING break decision, not
+        // overflow the current line.
+        let atoms = [
+            ("dd".to_string(), false),
+            ("ee".to_string(), true),
+            ("ff".to_string(), true),
+            ("+".to_string(), true),
+            ("gg".to_string(), true),
+        ];
+        let out = super::wrap_atoms(&atoms, 9);
+        for line in &out {
+            assert!(line.len() <= 9, "line too long: {line:?}");
+        }
+        assert!(
+            out.iter().skip(1).all(|l| !super::would_start_block(l)),
+            "no marker-led continuation: {out:?}"
+        );
+    }
+
+    #[test]
     fn wrap_splits_despite_marker_like_words() {
         let s = "- 1B: `serde-saphyr` pure-Rust (not `yaml_serde` rename). Accept MSRV bump + `Value` refactor.\n";
         let out = splice_format(s, 80, true);
@@ -1159,7 +1233,7 @@ mod tests {
     #[test]
     fn continuation_never_opens_fence_or_heading() {
         let s = "aaa bbb ccc ddd eee fff ggg hhh iii ``` kkk lll mmm nnn ooo ppp qqq rrr sss ttt uuu vvv www xxx yyy zzz end here\n";
-        let out = splice_format(&s, 40, true);
+        let out = splice_format(s, 40, true);
         for line in out.lines() {
             let t = line.trim_start();
             assert!(!t.starts_with("```"), "fence opened: {:?}", line);
@@ -1168,6 +1242,79 @@ mod tests {
                 !(t.starts_with('#') && (t.len() == 1 || t.as_bytes().get(1) == Some(&b' '))),
                 "heading opened: {:?}",
                 line
+            );
+        }
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 40, true), out, "fixpoint");
+    }
+
+    #[test]
+    fn block_opener_set_detected_accurately() {
+        // (atom, must-guard). Over-triggers are documented, never silent.
+        let guarded = [
+            "-",
+            "*",
+            "+",
+            "1.",
+            "2)",
+            "10.", // list markers
+            ">",
+            ">quoted", // blockquote (prefix match: over-triggers ">x")
+            "#",
+            "##",
+            "######", // ATX headings
+            "```",
+            "````rust",
+            "~~~", // fenced code
+            "---",
+            "***",
+            "___",
+            "===", // breaks / setext underline
+            "[1]:",
+            "[foo]:", // reference definitions
+            "<div",
+            "</div>",
+            "<!--",
+            "<?php",
+            "<!doctype",
+            "<hr>", // HTML blocks
+        ];
+        for atom in guarded {
+            assert!(would_start_block(atom), "must guard {atom:?}");
+        }
+        let safe = [
+            "->",  // dash without space: literal text, not a list
+            "1B:", // digits not followed by ./)
+            "C#",
+            "#tag", // # without space/end: literal text
+            "[x]",
+            "[exec|a]", // brackets without colon: not a refdef
+            "`code`",
+            "``x``", // code spans: atomic by span rule instead
+            "pure-Rust",
+            "a+b",
+            "word", // ordinary prose
+            "<3",
+            "a<b", // < not followed by tag opener
+        ];
+        for atom in safe {
+            assert!(!would_start_block(atom), "must not guard {atom:?}");
+        }
+        // Documented over-triggers (safe direction: slight overflow, no corruption).
+        assert!(would_start_block("2.5")); // version numbers glue to previous word
+    }
+
+    #[test]
+    fn continuation_never_opens_html_block() {
+        let s = format!(
+            "{} <div class=\"q\"> tail words here to fill the line out further along\n",
+            "a".repeat(36)
+        );
+        let out = splice_format(&s, 40, true);
+        for line in out.lines().skip(1) {
+            assert!(
+                !line.trim_start().starts_with("<div"),
+                "html block opened: {line:?}"
             );
         }
         html_eq(&s, &out);
