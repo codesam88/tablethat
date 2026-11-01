@@ -216,6 +216,9 @@ impl App {
     }
 
     fn load_selected(&mut self) {
+        // Stale hits must go even if the read fails below.
+        self.search_hits.clear();
+        self.search_index = 0;
         if let Some(path) = self.files.get(self.selected)
             && let Ok(text) = std::fs::read_to_string(path)
         {
@@ -233,8 +236,11 @@ impl App {
             self.content = lib::markdown::render_markdown(&th, &text, self.width);
             self.scroll = 0;
             self.offset = 0;
-            self.search_hits.clear();
-            self.search_index = 0;
+        }
+        // Reloads (resize, theme cycle, editor return, file switch) must
+        // not silently drop a live search: re-apply it to the new content.
+        if !self.search_query.is_empty() {
+            self.apply_search_highlight();
         }
     }
 
@@ -881,5 +887,99 @@ mod highlight_sync_tests {
         let (out, hits) = highlight_search(&lines, "", 0, hl_cur(), hl());
         assert!(hits.is_empty());
         assert_eq!(out[0].spans.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n_nav_bar_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn make_app() -> (tempfile::TempDir, App) {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("doc.md");
+        let mut text = String::new();
+        for i in 0..60 {
+            if i == 5 {
+                text.push_str("# needle headline here\n");
+            } else if i == 30 {
+                text.push_str("some **bold needle** text\n");
+            } else if i == 55 {
+                text.push_str("code `needle` sample\n");
+            } else {
+                text.push_str(&format!("plain filler line {i}\n"));
+            }
+        }
+        std::fs::write(&path, &text).unwrap();
+        let app = App::new(vec![path], Vec::new(), 80, true);
+        (tmp, app)
+    }
+
+    fn bar_colors(app: &mut App) -> Vec<(char, Color, Color)> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..24)
+            .map(|y| {
+                let c = buf.cell((79, y)).unwrap();
+                (c.symbol().chars().next().unwrap_or('?'), c.fg, c.bg)
+            })
+            .collect()
+    }
+
+    fn count_bg(bar: &[(char, Color, Color)], bg: Color) -> usize {
+        bar.iter().filter(|(_, _, b)| *b == bg).count()
+    }
+
+    #[test]
+    fn markers_survive_n_navigation() {
+        let (_tmp, mut app) = make_app();
+        app.search_query = "needle".to_string();
+        app.run_search();
+        let n0 = app.search_hits.len();
+        assert!(n0 >= 2, "need multiple hits, got {n0}");
+        for step in 0..(n0 + 1) {
+            if step > 0 {
+                app.search_next();
+            }
+            let bar = bar_colors(&mut app);
+            let y = count_bg(&bar, Color::Yellow);
+            let g = count_bg(&bar, Color::Gray);
+            assert!(y >= 1, "step {step}: yellow must survive");
+            assert!(y + g >= 1, "step {step}: markers must survive");
+        }
+    }
+}
+
+#[cfg(test)]
+mod search_persist_tests {
+    use super::*;
+
+    fn searched_app() -> (tempfile::TempDir, App) {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("doc.md");
+        std::fs::write(&path, "has needle here\nplain line\n").unwrap();
+        let mut app = App::new(vec![path], Vec::new(), 80, true);
+        app.search_query = "needle".to_string();
+        app.run_search();
+        assert!(!app.search_hits.is_empty());
+        (tmp, app)
+    }
+
+    #[test]
+    fn reload_keeps_search_state() {
+        let (_tmp, mut app) = searched_app();
+        app.load_selected();
+        assert!(
+            !app.search_hits.is_empty(),
+            "reload (resize/theme/editor return) must preserve hits"
+        );
+        let styled = app
+            .content
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.style == app.highlight_style || s.style == app.highlight_current_style);
+        assert!(styled, "highlight must survive reload");
     }
 }
