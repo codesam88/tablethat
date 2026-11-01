@@ -37,6 +37,19 @@ fn scrollbar_row_style(app: &App, row: usize, track_h: usize) -> Style {
     Style::default().fg(Color::DarkGray)
 }
 
+/// Glyph for one scrollbar row: matches render blank so the cell shows
+/// the highlight background (a full block would cover it with the
+/// highlight's black foreground); otherwise thumb █ or track │.
+fn scrollbar_glyph(style: Style, hl_current: Style, hl: Style, is_thumb: bool) -> &'static str {
+    if style == hl_current || style == hl {
+        " "
+    } else if is_thumb {
+        "█"
+    } else {
+        "│"
+    }
+}
+
 /// Visible-window thumb as a row range within a `track_h`-tall scrollbar.
 /// Exact at both ends (0 at top, `track_h` at bottom); proportional in
 /// between. `scroll` is clamped defensively; a fitting viewport fills all.
@@ -506,11 +519,13 @@ fn render(frame: &mut Frame, app: &mut App) {
             .map(|row| {
                 let row = row as usize;
                 let style = scrollbar_row_style(app, row, track_h);
-                let glyph = if row >= thumb.0 && row < thumb.1 {
-                    "█"
-                } else {
-                    "│"
-                };
+                let is_thumb = row >= thumb.0 && row < thumb.1;
+                let glyph = scrollbar_glyph(
+                    style,
+                    app.highlight_current_style,
+                    app.highlight_style,
+                    is_thumb,
+                );
                 Line::from(Span::styled(glyph, style))
             })
             .collect();
@@ -981,5 +996,202 @@ mod search_persist_tests {
             .flat_map(|l| l.spans.iter())
             .any(|s| s.style == app.highlight_style || s.style == app.highlight_current_style);
         assert!(styled, "highlight must survive reload");
+    }
+}
+
+#[cfg(test)]
+mod user_sequence_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn styled_doc() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("doc.md");
+        let mut text = String::new();
+        for i in 0..60 {
+            if i == 5 {
+                text.push_str("# needle headline here\n");
+            } else if i == 30 {
+                text.push_str("some **bold needle** text\n");
+            } else if i == 55 {
+                text.push_str("code `needle` sample\n");
+            } else {
+                text.push_str(&format!("plain filler line {i}\n"));
+            }
+        }
+        std::fs::write(&path, &text).unwrap();
+        (tmp, path)
+    }
+
+    fn bar_marks(app: &mut App) -> (usize, usize) {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut y = 0;
+        let mut g = 0;
+        for row in 0..24 {
+            match buf.cell((79, row)).unwrap().bg {
+                Color::Yellow => y += 1,
+                Color::Gray => g += 1,
+                _ => {}
+            }
+        }
+        (y, g)
+    }
+
+    #[test]
+    fn user_sequence_search_n_scroll() {
+        let (_tmp, path) = styled_doc();
+        let mut app = App::new(vec![path], Vec::new(), 80, true);
+        // type query + Enter
+        app.search_mode = true;
+        for ch in "needle".chars() {
+            app.search_query.push(ch);
+        }
+        app.search_mode = false;
+        app.run_search();
+        eprintln!(
+            "after enter: hits={:?} index={}",
+            app.search_hits, app.search_index
+        );
+        let (y, g) = bar_marks(&mut app);
+        eprintln!("frame0: yellow={y} gray={g}");
+        assert!(y >= 1, "yellow after enter");
+        // press n twice (walk all 3 hits with wrap)
+        for k in 1..=4 {
+            app.search_next();
+            let (y, g) = bar_marks(&mut app);
+            eprintln!("n{k}: index={} yellow={y} gray={g}", app.search_index);
+            assert!(y >= 1, "yellow must survive n (press {k})");
+        }
+        // manual scroll through the match zone
+        for s in [0usize, 5, 10, 15, 20] {
+            app.scroll = s;
+            let (y, g) = bar_marks(&mut app);
+            eprintln!("scroll={s} yellow={y} gray={g}");
+            assert!(y >= 1, "yellow must survive scroll {s}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod long_file_bar_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn long_app() -> (tempfile::TempDir, App) {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("doc.md");
+        let mut text = String::new();
+        for i in 0..300 {
+            if i == 20 || i == 150 || i == 280 {
+                text.push_str(&format!("# needle headline {i}\n\n"));
+            } else {
+                text.push_str(&format!("plain filler line number {i} with words\n\n"));
+            }
+        }
+        std::fs::write(&path, &text).unwrap();
+        let app = App::new(vec![path], Vec::new(), 80, true);
+        (tmp, app)
+    }
+
+    fn bar_bgs(app: &mut App) -> Vec<Color> {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..24).map(|y| buf.cell((79, y)).unwrap().bg).collect()
+    }
+
+    #[test]
+    fn markers_present_at_every_scroll() {
+        let (_tmp, mut app) = long_app();
+        app.search_query = "needle".to_string();
+        app.run_search();
+        assert!(!app.search_hits.is_empty());
+        let max = app.content.len();
+        let mut missing = 0;
+        for scroll in 0..=max {
+            app.scroll = scroll;
+            let bar = bar_bgs(&mut app);
+            let marks = bar
+                .iter()
+                .filter(|b| **b == Color::Yellow || **b == Color::Gray)
+                .count();
+            if marks < 3 {
+                // 3 hits; short content edge (last lines) may merge rows — log it
+                eprintln!("scroll={scroll} marks={marks}");
+                missing += 1;
+            }
+        }
+        assert_eq!(missing, 0, "markers must show at every scroll position");
+    }
+}
+
+#[cfg(test)]
+mod marker_layer_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn markers_layer_over_thumb_cells() {
+        // Short doc: full-thumb bar, so every marker row coincides with
+        // the thumb. Markers must still win: blank cells in highlight
+        // colors (a full block would cover the bg with black fg).
+        // Fails against thumb-wins rendering (verified by mutation).
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("doc.md");
+        std::fs::write(&path, "needle one\n\nmiddle filler\n\nneedle two\n").unwrap();
+        let mut app = App::new(vec![path], Vec::new(), 80, true);
+        app.search_query = "needle".to_string();
+        app.run_search();
+        assert_eq!(app.search_hits.len(), 2);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let bar: Vec<(String, Color)> = (0..24)
+            .map(|y| {
+                let c = buf.cell((79, y)).unwrap();
+                (c.symbol().to_string(), c.bg)
+            })
+            .collect();
+        assert!(
+            bar.iter().any(|(g, bg)| g == " " && *bg == Color::Yellow),
+            "current marker must top the thumb: {bar:?}"
+        );
+        assert!(
+            bar.iter().any(|(g, bg)| g == " " && *bg == Color::Gray),
+            "other markers must top the thumb: {bar:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod scrollbar_glyph_tests {
+    use super::*;
+
+    fn hl() -> Style {
+        Style::default().fg(Color::Black).bg(Color::Gray)
+    }
+
+    fn hl_cur() -> Style {
+        Style::default().fg(Color::Black).bg(Color::Yellow)
+    }
+
+    #[test]
+    fn matches_render_blank_for_full_background() {
+        assert_eq!(scrollbar_glyph(hl_cur(), hl_cur(), hl(), true), " ");
+        assert_eq!(scrollbar_glyph(hl(), hl_cur(), hl(), true), " ");
+        assert_eq!(scrollbar_glyph(hl(), hl_cur(), hl(), false), " ");
+    }
+
+    #[test]
+    fn plain_rows_keep_thumb_track_shapes() {
+        let plain = Style::default().fg(Color::DarkGray);
+        assert_eq!(scrollbar_glyph(plain, hl_cur(), hl(), true), "█");
+        assert_eq!(scrollbar_glyph(plain, hl_cur(), hl(), false), "│");
     }
 }
