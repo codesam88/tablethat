@@ -30,10 +30,8 @@ pub struct Config {
     pub pager_width: usize,
     /// Render width for piped (filter) output.
     pub width: usize,
-    /// Wrap width for `plan format` (default: 80).
-    pub format_width: usize,
-    /// Whether `plan format` joins short lines into flow before re-splitting (default: true).
-    pub format_reflow: bool,
+    /// Format configuration for `plan format`.
+    pub format: FormatConfig,
     /// Status/priority colors for kanban display.
     pub colors: ColorsConfig,
 }
@@ -45,6 +43,24 @@ pub struct ColorsConfig {
     pub status: StatusColors,
     /// Per-priority colors.
     pub priority: PriorityColors,
+}
+
+/// Format configuration for `plan format`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FormatConfig {
+    /// Wrap width for `plan format` (default: 80).
+    pub width: usize,
+    /// Whether `plan format` joins short lines into flow before re-splitting (default: true).
+    pub reflow: bool,
+}
+
+impl Default for FormatConfig {
+    fn default() -> Self {
+        Self {
+            width: 80,
+            reflow: true,
+        }
+    }
 }
 
 /// Color per task status; unknown statuses render white.
@@ -95,8 +111,7 @@ impl Default for Config {
             tui_width: 80,
             pager_width: 100,
             width: 80,
-            format_width: 80,
-            format_reflow: true,
+            format: FormatConfig::default(),
             colors: ColorsConfig::default(),
         }
     }
@@ -206,7 +221,7 @@ impl Config {
         }
 
         // Layer 2: environment variables
-        figment = figment.merge(Env::prefixed(env_prefix));
+        figment = figment.merge(Env::prefixed(env_prefix).split("__"));
 
         match figment.extract::<Config>() {
             Ok(cfg) => Ok(cfg),

@@ -297,8 +297,8 @@ fn run(cli: Cli) -> Result<(), String> {
                     for entry in &entries {
                         match tablethat_lib::plan::format::format_file(
                             entry,
-                            cfg.format_width,
-                            cfg.format_reflow,
+                            cfg.format.width,
+                            cfg.format.reflow,
                         ) {
                             Ok(true) => eprintln!("formatted {}", entry.display()),
                             Ok(false) => {}
@@ -312,8 +312,8 @@ fn run(cli: Cli) -> Result<(), String> {
                 } else if p.is_file() {
                     match tablethat_lib::plan::format::format_file(
                         &p,
-                        cfg.format_width,
-                        cfg.format_reflow,
+                        cfg.format.width,
+                        cfg.format.reflow,
                     ) {
                         Ok(true) => {
                             eprintln!("formatted {}", p.display());
@@ -328,8 +328,8 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             None => match tablethat_lib::plan::format::normalize_all(
                 &root,
-                cfg.format_width,
-                cfg.format_reflow,
+                cfg.format.width,
+                cfg.format.reflow,
             ) {
                 Ok(0) => {
                     eprintln!("all files already canonical");
