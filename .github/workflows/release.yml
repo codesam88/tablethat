@@ -117,8 +117,10 @@ jobs:
 
       - name: Assert static linking
         run: |
-          file target/x86_64-unknown-linux-musl/release/plan | grep -q "statically linked"
-          file target/x86_64-unknown-linux-musl/release/gloss | grep -q "statically linked"
+          file target/x86_64-unknown-linux-musl/release/plan
+          file target/x86_64-unknown-linux-musl/release/gloss
+          file target/x86_64-unknown-linux-musl/release/plan | grep -Eq "statically linked|static-pie linked"
+          file target/x86_64-unknown-linux-musl/release/gloss | grep -Eq "statically linked|static-pie linked"
 
       - name: Install nfpm
         run: |
