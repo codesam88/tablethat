@@ -3,14 +3,12 @@ name: Workflow lint
 permissions:
   contents: read
 
+# NOTE: no path filters — zizmor is a required status check, and a
+# filtered-out workflow never reports, which would block every PR.
 on:
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/**"
   pull_request:
-    paths:
-      - ".github/workflows/**"
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:

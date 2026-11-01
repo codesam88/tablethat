@@ -3,16 +3,12 @@ name: CI
 permissions:
   contents: read
 
+# NOTE: no path filters — all jobs are required status checks, and a
+# filtered-out workflow never reports, which would block every PR.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "*.md"
-      - ".plan/*.md"
   pull_request:
-    paths-ignore:
-      - "*.md"
-      - ".plan/*.md"
   workflow_dispatch:
 
 concurrency:

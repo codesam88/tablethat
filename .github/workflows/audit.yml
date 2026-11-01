@@ -3,18 +3,12 @@ name: Security audit
 permissions:
   contents: read
 
+# NOTE: no path filters — all jobs are required status checks, and a
+# filtered-out workflow never reports, which would block every PR.
 on:
   push:
     branches: [main]
-    paths:
-      - "Cargo.lock"
-      - "**/Cargo.toml"
-      - "**/deny.toml"
   pull_request:
-    paths:
-      - "Cargo.lock"
-      - "**/Cargo.toml"
-      - "**/deny.toml"
   schedule:
     - cron: "0 6 * * *"
 
