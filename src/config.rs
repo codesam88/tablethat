@@ -30,6 +30,10 @@ pub struct Config {
     pub pager_width: usize,
     /// Render width for piped (filter) output.
     pub width: usize,
+    /// Wrap width for `plan format` (default: 80).
+    pub format_width: usize,
+    /// Whether `plan format` joins short lines into flow before re-splitting (default: true).
+    pub format_reflow: bool,
     /// Status/priority colors for kanban display.
     pub colors: ColorsConfig,
 }
@@ -91,6 +95,8 @@ impl Default for Config {
             tui_width: 80,
             pager_width: 100,
             width: 80,
+            format_width: 80,
+            format_reflow: true,
             colors: ColorsConfig::default(),
         }
     }
