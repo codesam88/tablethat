@@ -23,7 +23,8 @@ D-2 confirmed (keep pad-to-width pipe style).
 Implemented (3 worker items, senior-reviewed, all committed):
 skeleton + ws-strip, AST table alignment (incl. nested/quote fix),
 wrap + wiring + old-code deletion. Perf: whole-.plan format ~30ms,
-fixpoint clean. Open: PR checks, then merge decision (user).
+fixpoint clean. Item 4 (worker): format_width/format_reflow config +
+reflow joins. Open: PR checks, then merge decision (user).
 
 ## Plan
 
@@ -53,12 +54,14 @@ tables or code blocks.
 
 #### Functional requirements (v1 normalization set)
 
-- **FR-1 — Never join prose lines.** Soft line breaks pass through
-  untouched; short lines are never drawn up into the line above.
-  (Reproduced bug 1 becomes structurally impossible.)
+- **FR-1 — Join policy follows `format_reflow`.** With reflow off,
+  soft line breaks pass through untouched; short lines are never drawn
+  up into the line above. With reflow on (default), each paragraph unit
+  is joined into word flow and re-split to the width.
 - **FR-2 — Preserve hardbreak flavor.** `two-spaces + newline` and
   `backslash + newline` are both kept as authored, and each ends the
-  current wrapping unit: segments wrap independently. (Reproduced bug 2.)
+  current wrapping unit: segments wrap (and reflow) independently.
+  (Reproduced bug 2.)
 - **FR-3 — Align tables without content loss.** Column padding via
   parser-given cell boundaries; pipes inside code spans or escaped pipes
   are never treated as delimiters. Tables are never wrapped.
@@ -80,11 +83,15 @@ tables or code blocks.
 - **FR-8 — Everything else byte-identical.** Markers, heading styles,
   blank-line runs, code-span backticks, reference links are not opinions
   v1 holds.
-- **FR-9 — Contracts unchanged.** `format_commonmark(body, width)`
-  keeps its signature; `plan format` CLI, `format_file` changed-flag,
-  `normalize_all` fixpoint, and the frontmatter path in
+- **FR-9 — Contracts unchanged.** `plan format` CLI, `format_file`
+  changed-flag, `normalize_all` fixpoint, and the frontmatter path in
   `src/plan/format.rs` (canonical order, YAML quoting) are untouched;
-  call sites move from 120 to the new default 80.
+  width/reflow reach the engine from user configuration (FR-10).
+- **FR-10 — Format configuration.** `format_width` (default 80) and
+  `format_reflow` (default true) live in `Config` with standard layering
+  (defaults < `plan.toml` < `PLAN_FORMAT_WIDTH` / `PLAN_FORMAT_REFLOW`
+  env), documented in `plan.toml.example` alongside the other widths.
+  No CLI flags in v1 (follow-up note).
 
 #### Non-functional requirements
 
@@ -186,8 +193,10 @@ only thing the engine emits; everything else is the input.
   code span crossing the width stays atomic (neighbors break around
   it); single overlong word overflows; nested list / blockquote /
   definition prose wraps with correct prefixes; trailing-ws stripped
-  with hardbreak exemption. Each test also asserts NFR-2
-  (HTML-equivalence) for its input.
+  with hardbreak exemption. Reflow tests (run with reflow on): short
+  lines join into flow and re-split to width; containers reflow with
+  indents; hardbreak segments stay independent; reflow fixpoint. Each
+  test also asserts NFR-2 (HTML-equivalence) for its input.
 - **Fixpoint corpus test:** a mixed file (all of the above plus headings,
   lists, code blocks, HTML) formats to a fixpoint; extends the existing
   `formatter_is_idempotent` pin rather than replacing it.
