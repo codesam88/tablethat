@@ -1,5 +1,6 @@
 # tablethat dev tasks — plan + gloss
 # Install just: cargo install just
+# Install uv (for zizmor): curl -LsSf astral.sh/uv/install.sh | sh
 # Activate pre-commit hook: git config core.hooksPath .githooks
 
 [private]
@@ -51,7 +52,7 @@ audit:
 
 # Lint workflows offline (no network)
 zizmor-check:
-    zizmor --offline --min-severity low .github/workflows
+    uvx zizmor --offline --min-severity low .github/workflows
 
 # install binaries + themes to ~/.config
 install:
@@ -67,9 +68,9 @@ uninstall:
     @rm -f ~/.config/plan/themes/*.toml ~/.config/gloss/themes/*.toml
     @echo "Removed binaries and themes"
 
-# install cargo-deny + cargo-audit + zizmor
+# install cargo-deny + cargo-audit (zizmor runs via uvx, no install)
 install-dev:
-    cargo install cargo-deny cargo-audit zizmor
+    cargo install cargo-deny cargo-audit
 
 # install dev tools + pre-commit hook
 setup-dev: install-dev
