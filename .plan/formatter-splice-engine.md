@@ -20,11 +20,12 @@ Done: shared `comrak_options()` constructor (renderer + formatter).
 Requirements v3: configurable prose wrap (default 80, split-only,
 containers wrapped with continuation indent, code spans atomic).
 D-2 confirmed (keep pad-to-width pipe style).
-Implemented (3 worker items, senior-reviewed, all committed):
+Implemented (4 worker items, senior-reviewed, all committed):
 skeleton + ws-strip, AST table alignment (incl. nested/quote fix),
-wrap + wiring + old-code deletion. Perf: whole-.plan format ~30ms,
-fixpoint clean. Item 4 (worker): format_width/format_reflow config +
-reflow joins. Open: PR checks, then merge decision (user).
+wrap + wiring + old-code deletion, format_width/format_reflow +
+reflow joins (restructured to `[format]` section + `docs/config.md`).
+Perf: whole-.plan format ~30ms, fixpoint clean. Open: PR checks,
+then merge decision (user).
 
 ## Plan
 
