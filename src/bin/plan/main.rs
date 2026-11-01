@@ -295,7 +295,11 @@ fn run(cli: Cli) -> Result<(), String> {
                     let entries = tablethat_lib::plan::store::sorted_md_entries(&p)?;
                     let mut errors: Vec<String> = Vec::new();
                     for entry in &entries {
-                        match tablethat_lib::plan::format::format_file(entry, 80) {
+                        match tablethat_lib::plan::format::format_file(
+                            entry,
+                            cfg.format_width,
+                            cfg.format_reflow,
+                        ) {
                             Ok(true) => eprintln!("formatted {}", entry.display()),
                             Ok(false) => {}
                             Err(e) => errors.push(e),
@@ -306,7 +310,11 @@ fn run(cli: Cli) -> Result<(), String> {
                     }
                     Ok(())
                 } else if p.is_file() {
-                    match tablethat_lib::plan::format::format_file(&p, 80) {
+                    match tablethat_lib::plan::format::format_file(
+                        &p,
+                        cfg.format_width,
+                        cfg.format_reflow,
+                    ) {
                         Ok(true) => {
                             eprintln!("formatted {}", p.display());
                             Ok(())
@@ -318,7 +326,11 @@ fn run(cli: Cli) -> Result<(), String> {
                     Err(format!("{}: not a file or directory", p.display()))
                 }
             }
-            None => match tablethat_lib::plan::format::normalize_all(&root) {
+            None => match tablethat_lib::plan::format::normalize_all(
+                &root,
+                cfg.format_width,
+                cfg.format_reflow,
+            ) {
                 Ok(0) => {
                     eprintln!("all files already canonical");
                     Ok(())

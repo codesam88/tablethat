@@ -5,11 +5,11 @@
 ///
 /// ```
 /// # use tablethat_lib::markdown_fmt::format_commonmark;
-/// let out = format_commonmark("# Title\n", 80);
+/// let out = format_commonmark("# Title\n", 80, false);
 /// assert!(out.contains("# Title"));
 /// ```
-pub fn format_commonmark(text: &str, width: usize) -> String {
-    splice_format(text, width)
+pub fn format_commonmark(text: &str, width: usize, reflow: bool) -> String {
+    splice_format(text, width, reflow)
 }
 
 #[derive(Debug, Clone)]
@@ -40,7 +40,7 @@ fn collect_hardbreak_lines(node: &comrak::Node<'_>, out: &mut std::collections::
 
 /// Conservative splice engine: strip trailing whitespace (hardbreak-exempt),
 /// align tables from AST line ranges, and split-only wrap prose to `width`.
-fn splice_format(text: &str, width: usize) -> String {
+fn splice_format(text: &str, width: usize, reflow: bool) -> String {
     let arena = comrak::Arena::new();
     let opts = crate::markdown::comrak_options();
     let root = comrak::parse_document(&arena, text, &opts);
@@ -76,10 +76,10 @@ fn splice_format(text: &str, width: usize) -> String {
             continue;
         }
         let has_overlong = (cand.start..=cand.end).any(|ln| lines[ln - 1].len() > width);
-        if !has_overlong {
+        if !reflow && !has_overlong {
             continue;
         }
-        let rendered = render_wrap(cand, &lines, width, &hardbreak_lines);
+        let rendered = render_wrap(cand, &lines, width, &hardbreak_lines, reflow);
         wrap_outputs.insert((cand.start, cand.end), rendered);
         wrap_ranges.push((cand.start, cand.end));
         edits.push(SpliceEdit::WrapText {
@@ -429,16 +429,189 @@ fn render_wrap(
     lines: &[&str],
     width: usize,
     hardbreak_lines: &std::collections::HashSet<usize>,
+    reflow: bool,
 ) -> Vec<String> {
     let mut out = Vec::new();
-    for (i, ln) in (cand.start..=cand.end).enumerate() {
-        let idx = ln - 1;
-        if idx >= lines.len() {
-            break;
+
+    if !reflow {
+        // Split-only behavior: each source line wraps independently; short
+        // lines are kept (never joined).
+        for (i, ln) in (cand.start..=cand.end).enumerate() {
+            let idx = ln - 1;
+            if idx >= lines.len() {
+                break;
+            }
+            let line = lines[idx];
+            let is_first = i == 0;
+            let pfx = if is_first {
+                let col = cand.start_col;
+                if col >= 1 && col - 1 <= line.len() {
+                    line[..col - 1].to_string()
+                } else {
+                    let mut s = String::new();
+                    for c in line.chars() {
+                        if c == ' ' {
+                            s.push(c);
+                        } else {
+                            break;
+                        }
+                    }
+                    s
+                }
+            } else {
+                detect_prefix(line)
+            };
+            let cont_prefix = compute_cont_prefix(&pfx, cand.in_list);
+
+            let is_hardbreak = hardbreak_lines.contains(&ln);
+
+            if cand.multiline_code_lines.contains(&ln) {
+                if is_hardbreak {
+                    out.push(line.to_string());
+                } else {
+                    out.push(line.trim_end().to_string());
+                }
+                continue;
+            }
+
+            if line.len() <= width {
+                if is_hardbreak {
+                    out.push(line.to_string());
+                } else {
+                    out.push(line.trim_end().to_string());
+                }
+                continue;
+            }
+
+            let marker_str = if is_hardbreak {
+                if line.ends_with('\\') { "\\" } else { "  " }
+            } else {
+                ""
+            };
+            let body = if marker_str == "  " && line.ends_with("  ") {
+                &line[..line.len().saturating_sub(2)]
+            } else if marker_str == "\\" && line.ends_with('\\') {
+                &line[..line.len().saturating_sub(1)]
+            } else {
+                line
+            };
+
+            if pfx.len() > body.len() {
+                out.push(line.to_string());
+                continue;
+            }
+            let content = &body[pfx.len()..];
+
+            let mut ivals: Vec<(usize, usize)> = cand
+                .code_ranges
+                .iter()
+                .filter(|(l, _, _)| *l == ln)
+                .map(|(_, s, e)| {
+                    let ss = s.saturating_sub(1);
+                    let ee = *e;
+                    let cs = ss.saturating_sub(pfx.len());
+                    let ce = ee.saturating_sub(pfx.len());
+                    (cs, ce)
+                })
+                .filter(|(s, e)| *s <= content.len() && *e <= content.len() && s <= e)
+                .collect();
+            ivals.sort();
+
+            let raw_atoms = tokenize_content(content, &ivals);
+            let mut atoms: Vec<(String, bool)> = Vec::new();
+            for (atom, sp) in raw_atoms {
+                if !sp && !atoms.is_empty() {
+                    let last = atoms.last_mut().unwrap();
+                    last.0.push_str(&atom);
+                } else {
+                    atoms.push((atom, sp));
+                }
+            }
+
+            let risky = atoms
+                .iter()
+                .skip(1)
+                .any(|(a, _)| starts_with_list_marker(a));
+            if risky || atoms.len() <= 1 {
+                if is_hardbreak {
+                    out.push(line.to_string());
+                } else {
+                    out.push(line.trim_end().to_string());
+                }
+                continue;
+            }
+
+            let max_content_width = if width > pfx.len() + marker_str.len() {
+                width - pfx.len() - marker_str.len()
+            } else {
+                0
+            };
+
+            let wrapped = if max_content_width > 0 {
+                wrap_atoms(&atoms, max_content_width)
+            } else {
+                vec![content.to_string()]
+            };
+
+            let nseg = wrapped.len();
+            for (j, cl) in wrapped.iter().enumerate() {
+                let prefix = if j == 0 { &pfx } else { &cont_prefix };
+                let mut out_line = format!("{}{}", prefix, cl);
+                if j == nseg - 1 && !marker_str.is_empty() {
+                    out_line.push_str(marker_str);
+                }
+                out.push(out_line);
+            }
         }
-        let line = lines[idx];
-        let is_first = i == 0;
-        let pfx = if is_first {
+        return out;
+    }
+
+    // Reflow mode: join soft-broken lines within a hardbreak-delimited unit
+    // into word flow, then re-split to width.
+
+    // Build units (line ranges) separated by hardbreaks.
+    let mut units: Vec<(usize, usize)> = Vec::new();
+    let mut us: Option<usize> = None;
+    for ln in cand.start..=cand.end {
+        if us.is_none() {
+            us = Some(ln);
+        }
+        if hardbreak_lines.contains(&ln) {
+            units.push((us.unwrap(), ln));
+            us = None;
+        }
+    }
+    if let Some(s) = us {
+        units.push((s, cand.end));
+    }
+
+    for (unit_start, unit_end) in units {
+        let unit_lines: Vec<usize> = (unit_start..=unit_end).collect();
+
+        // Multiline code span: never split, keep verbatim (trim unless hardbreak).
+        if unit_lines
+            .iter()
+            .any(|ln| cand.multiline_code_lines.contains(ln))
+        {
+            for ln in &unit_lines {
+                let idx = ln - 1;
+                if idx >= lines.len() {
+                    break;
+                }
+                let line = lines[idx];
+                if hardbreak_lines.contains(ln) {
+                    out.push(line.to_string());
+                } else {
+                    out.push(line.trim_end().to_string());
+                }
+            }
+            continue;
+        }
+
+        let first_ln = unit_lines[0];
+        let overall_first = first_ln == cand.start;
+        let pfx = if overall_first {
+            let line = lines[first_ln - 1];
             let col = cand.start_col;
             if col >= 1 && col - 1 <= line.len() {
                 line[..col - 1].to_string()
@@ -454,121 +627,156 @@ fn render_wrap(
                 s
             }
         } else {
-            detect_prefix(line)
+            detect_prefix(lines[first_ln - 1])
         };
         let cont_prefix = compute_cont_prefix(&pfx, cand.in_list);
 
-        let is_hardbreak = hardbreak_lines.contains(&ln);
+        let unit_is_hardbreak = hardbreak_lines.contains(&unit_end);
 
-        // Lines that are part of a multi-line code span must never be split.
-        if cand.multiline_code_lines.contains(&ln) {
-            if is_hardbreak {
-                out.push(line.to_string());
+        // Collect atoms across all soft lines in the unit.
+        let mut unit_atoms: Vec<(String, bool)> = Vec::new();
+        let mut fallback_original = false;
+        for (k, ln) in unit_lines.iter().enumerate() {
+            let idx = ln - 1;
+            if idx >= lines.len() {
+                fallback_original = true;
+                break;
+            }
+            let line = lines[idx];
+            let lpfx = if k == 0 {
+                pfx.clone()
             } else {
-                out.push(line.trim_end().to_string());
+                detect_prefix(line)
+            };
+
+            let line_is_hardbreak = hardbreak_lines.contains(ln);
+            let marker_str = if line_is_hardbreak {
+                if line.ends_with('\\') { "\\" } else { "  " }
+            } else {
+                ""
+            };
+            let body = if marker_str == "  " && line.ends_with("  ") {
+                &line[..line.len().saturating_sub(2)]
+            } else if marker_str == "\\" && line.ends_with('\\') {
+                &line[..line.len().saturating_sub(1)]
+            } else {
+                line
+            };
+
+            if lpfx.len() > body.len() {
+                fallback_original = true;
+                break;
+            }
+            let content = &body[lpfx.len()..];
+
+            let mut ivals: Vec<(usize, usize)> = cand
+                .code_ranges
+                .iter()
+                .filter(|(l, _, _)| *l == *ln)
+                .map(|(_, s, e)| {
+                    let ss = s.saturating_sub(1);
+                    let ee = *e;
+                    let cs = ss.saturating_sub(lpfx.len());
+                    let ce = ee.saturating_sub(lpfx.len());
+                    (cs, ce)
+                })
+                .filter(|(s, e)| *s <= content.len() && *e <= content.len() && s <= e)
+                .collect();
+            ivals.sort();
+
+            let raw_atoms = tokenize_content(content, &ivals);
+            let mut atoms: Vec<(String, bool)> = Vec::new();
+            for (atom, sp) in raw_atoms {
+                if !sp && !atoms.is_empty() {
+                    let last = atoms.last_mut().unwrap();
+                    last.0.push_str(&atom);
+                } else {
+                    atoms.push((atom, sp));
+                }
+            }
+
+            if k > 0 && !atoms.is_empty() {
+                atoms[0].1 = true;
+            }
+            unit_atoms.extend(atoms);
+        }
+
+        if fallback_original {
+            for ln in &unit_lines {
+                let idx = ln - 1;
+                if idx >= lines.len() {
+                    break;
+                }
+                let line = lines[idx];
+                if hardbreak_lines.contains(ln) {
+                    out.push(line.to_string());
+                } else {
+                    out.push(line.trim_end().to_string());
+                }
             }
             continue;
         }
 
-        // short line: keep (strip trailing ws unless hardbreak)
-        if line.len() <= width {
-            if is_hardbreak {
-                out.push(line.to_string());
-            } else {
-                out.push(line.trim_end().to_string());
-            }
-            continue;
-        }
-
-        // hardbreak marker
-        let marker_str = if is_hardbreak {
-            if line.ends_with('\\') { "\\" } else { "  " }
-        } else {
-            ""
-        };
-        let body = if marker_str == "  " && line.ends_with("  ") {
-            &line[..line.len().saturating_sub(2)]
-        } else if marker_str == "\\" && line.ends_with('\\') {
-            &line[..line.len().saturating_sub(1)]
-        } else {
-            line
-        };
-
-        if pfx.len() > body.len() {
-            out.push(line.to_string());
-            continue;
-        }
-        let content = &body[pfx.len()..];
-
-        // code intervals relative to this line, then content
-        let mut ivals: Vec<(usize, usize)> = cand
-            .code_ranges
-            .iter()
-            .filter(|(l, _, _)| *l == ln)
-            .map(|(_, s, e)| {
-                let ss = s.saturating_sub(1);
-                let ee = *e;
-                let cs = ss.saturating_sub(pfx.len());
-                let ce = ee.saturating_sub(pfx.len());
-                (cs, ce)
-            })
-            .filter(|(s, e)| *s <= content.len() && *e <= content.len() && s <= e)
-            .collect();
-        ivals.sort();
-
-        let raw_atoms = tokenize_content(content, &ivals);
-        // Merge adjacent atoms that had no whitespace between them, so wrapping
-        // never inserts a space (or break) where the source had none — keeps
-        // HTML-equivalence for constructs like "(`code`".
-        let mut atoms: Vec<(String, bool)> = Vec::new();
-        for (atom, sp) in raw_atoms {
-            if !sp && !atoms.is_empty() {
-                let last = atoms.last_mut().unwrap();
-                last.0.push_str(&atom);
-            } else {
-                atoms.push((atom, sp));
-            }
-        }
-
-        // If wrapping would place a list-marker-like token at the start of a
-        // continuation line, the result would be parsed as a nested list and
-        // break HTML-equivalence. Leave such lines unsplit (overflow) instead.
-        let risky = atoms
+        let risky = unit_atoms
             .iter()
             .skip(1)
             .any(|(a, _)| starts_with_list_marker(a));
-        if risky || atoms.len() <= 1 {
-            // still strip trailing ws for short? line is long here; push original (marker-aware)
-            if is_hardbreak {
-                out.push(line.to_string());
-            } else {
-                out.push(line.trim_end().to_string());
+        if risky || unit_atoms.is_empty() {
+            for ln in &unit_lines {
+                let idx = ln - 1;
+                if idx >= lines.len() {
+                    break;
+                }
+                let line = lines[idx];
+                if hardbreak_lines.contains(ln) {
+                    out.push(line.to_string());
+                } else {
+                    out.push(line.trim_end().to_string());
+                }
             }
             continue;
         }
 
-        let max_content_width = if width > pfx.len() + marker_str.len() {
-            width - pfx.len() - marker_str.len()
+        let unit_marker = if unit_is_hardbreak {
+            let last_line = lines[unit_end - 1];
+            if last_line.ends_with('\\') {
+                "\\"
+            } else {
+                "  "
+            }
+        } else {
+            ""
+        };
+
+        let max_content_width = if width > pfx.len() + unit_marker.len() {
+            width - pfx.len() - unit_marker.len()
         } else {
             0
         };
 
         let wrapped = if max_content_width > 0 {
-            wrap_atoms(&atoms, max_content_width)
+            wrap_atoms(&unit_atoms, max_content_width)
         } else {
-            vec![content.to_string()]
+            vec![
+                unit_atoms
+                    .iter()
+                    .map(|(a, _)| a.clone())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ]
         };
 
         let nseg = wrapped.len();
         for (j, cl) in wrapped.iter().enumerate() {
             let prefix = if j == 0 { &pfx } else { &cont_prefix };
             let mut out_line = format!("{}{}", prefix, cl);
-            if j == nseg - 1 && !marker_str.is_empty() {
-                out_line.push_str(marker_str);
+            if j == nseg - 1 && !unit_marker.is_empty() {
+                out_line.push_str(unit_marker);
             }
             out.push(out_line);
         }
     }
+
     out
 }
 
@@ -730,39 +938,39 @@ mod tests {
     #[test]
     fn trailing_ws_stripped_hardbreak_exempt() {
         let a = "para  \nnext\n";
-        assert_eq!(splice_format(a, 80), a);
-        html_eq(a, &splice_format(a, 80));
+        assert_eq!(splice_format(a, 80, false), a);
+        html_eq(a, &splice_format(a, 80, false));
 
         let b = "trail x  \nnext\n";
-        assert_eq!(splice_format(b, 80), b);
-        html_eq(b, &splice_format(b, 80));
+        assert_eq!(splice_format(b, 80, false), b);
+        html_eq(b, &splice_format(b, 80, false));
 
         let c = "trail x \nnext\n";
         let c_out = "trail x\nnext\n";
-        assert_eq!(splice_format(c, 80), c_out);
-        html_eq(c, &splice_format(c, 80));
+        assert_eq!(splice_format(c, 80, false), c_out);
+        html_eq(c, &splice_format(c, 80, false));
     }
 
     #[test]
     fn short_softbreak_lines_preserved() {
         let s = "First soft line\nsecond soft line\n";
-        assert_eq!(splice_format(s, 80), s);
-        html_eq(s, &splice_format(s, 80));
+        assert_eq!(splice_format(s, 80, false), s);
+        html_eq(s, &splice_format(s, 80, false));
     }
 
     #[test]
     fn hardbreak_flavors_preserved() {
         for s in ["a  \nb\n", "a\\\nb\n"] {
-            assert_eq!(splice_format(s, 80), s);
-            html_eq(s, &splice_format(s, 80));
+            assert_eq!(splice_format(s, 80, false), s);
+            html_eq(s, &splice_format(s, 80, false));
         }
     }
 
     #[test]
     fn long_line_untouched_without_wrapper() {
         let s = format!("{}\n", "x".repeat(200));
-        assert_eq!(splice_format(&s, 80), s);
-        html_eq(&s, &splice_format(&s, 80));
+        assert_eq!(splice_format(&s, 80, false), s);
+        html_eq(&s, &splice_format(&s, 80, false));
     }
 
     // ---- item 2 tests ----
@@ -770,7 +978,7 @@ mod tests {
     #[test]
     fn piped_code_span_table_aligns_losslessly() {
         let s = "| Name | Note |\n| ---- | ---- |\n| `a | b` | piped code |\n";
-        let out = splice_format(s, 80);
+        let out = splice_format(s, 80, false);
         let expected =
             "| Name    | Note       |\n| ------- | ---------- |\n| `a | b` | piped code |\n";
         assert_eq!(out, expected);
@@ -780,15 +988,15 @@ mod tests {
     #[test]
     fn aligned_table_is_fixpoint() {
         let s = "| Name | Note |\n| ---- | ---- |\n| `a | b` | piped code |\n";
-        let once = splice_format(s, 80);
-        let twice = splice_format(&once, 80);
+        let once = splice_format(s, 80, false);
+        let twice = splice_format(&once, 80, false);
         assert_eq!(once, twice);
     }
 
     #[test]
     fn table_style_matches_existing_convention() {
         let s = "| a | bbbb |\n|---|---|\n| cccc | d |\n";
-        let out = splice_format(s, 80);
+        let out = splice_format(s, 80, false);
         let expected = "| a    | bbbb |\n| ---- | ---- |\n| cccc | d    |\n";
         assert_eq!(out, expected);
         html_eq(s, &out);
@@ -797,7 +1005,7 @@ mod tests {
     #[test]
     fn nested_table_indent_preserved() {
         let s = "- item\n\n  | A | B |\n  | - | - |\n  | x | y |\n";
-        let out = splice_format(s, 80);
+        let out = splice_format(s, 80, false);
         // At minimum indent + 2 columns preserved; expect exact aligned form:
         // We only assert indent present on every row and 2 columns.
         for line in out.lines() {
@@ -822,7 +1030,7 @@ mod tests {
     #[test]
     fn quoted_table_left_untouched() {
         let s = "> quote\n>\n> | A | B |\n> | - | - |\n> | x | y |\n";
-        let out = splice_format(s, 80);
+        let out = splice_format(s, 80, false);
         assert_eq!(out, s);
         html_eq(s, &out);
     }
@@ -830,7 +1038,7 @@ mod tests {
     #[test]
     fn multiline_code_span_never_split() {
         let s = "`start\n".to_string() + &"word ".repeat(14) + "aaaa more inside span` tail here\n";
-        let out = splice_format(&s, 80);
+        let out = splice_format(&s, 80, false);
         assert_eq!(out, s, "multiline code span must not be split");
         html_eq(&s, &out);
     }
@@ -842,45 +1050,45 @@ mod tests {
         let long_word = "word ";
         let long_line = long_word.repeat(40); // ~200 chars
         let s = format!("{}\n", long_line.trim_end());
-        let out = splice_format(&s, 80);
+        let out = splice_format(&s, 80, false);
         for line in out.lines() {
             assert!(line.len() <= 80, "line too long: {} ({})", line, line.len());
         }
         assert!(out.lines().count() > 1, "should split");
         html_eq(&s, &out);
         // fixpoint
-        assert_eq!(splice_format(&out, 80), out);
+        assert_eq!(splice_format(&out, 80, false), out);
 
         // two short lines stay byte-identical
         let short = "first short line\nsecond short line\n";
-        assert_eq!(splice_format(short, 80), short);
-        html_eq(short, &splice_format(short, 80));
+        assert_eq!(splice_format(short, 80, false), short);
+        html_eq(short, &splice_format(short, 80, false));
     }
 
     #[test]
     fn code_span_is_atomic() {
         let s = "Here is text before `code span that crosses the boundary here` and more trailing text after it to force wrap\n";
-        let out = splice_format(s, 80);
+        let out = splice_format(s, 80, false);
         assert!(
             out.contains("`code span that crosses the boundary here`"),
             "code span must stay whole: {}",
             out
         );
         html_eq(s, &out);
-        assert_eq!(splice_format(&out, 80), out);
+        assert_eq!(splice_format(&out, 80, false), out);
     }
 
     #[test]
     fn overlong_word_overflows() {
         let s = format!("{}\n", "x".repeat(100));
-        assert_eq!(splice_format(&s, 80), s);
-        html_eq(&s, &splice_format(&s, 80));
+        assert_eq!(splice_format(&s, 80, false), s);
+        html_eq(&s, &splice_format(&s, 80, false));
     }
 
     #[test]
     fn nested_list_wraps_with_indent() {
         let s = format!("- {}\n", "word ".repeat(30).trim_end());
-        let out = splice_format(&s, 80);
+        let out = splice_format(&s, 80, false);
         let lines: Vec<&str> = out.lines().collect();
         assert!(lines.len() > 1, "should wrap");
         if lines.len() > 1 {
@@ -891,11 +1099,11 @@ mod tests {
             );
         }
         html_eq(&s, &out);
-        assert_eq!(splice_format(&out, 80), out);
+        assert_eq!(splice_format(&out, 80, false), out);
 
         // ordered
         let s2 = format!("1. {}\n", "word ".repeat(30).trim_end());
-        let out2 = splice_format(&s2, 80);
+        let out2 = splice_format(&s2, 80, false);
         let lines2: Vec<&str> = out2.lines().collect();
         if lines2.len() > 1 {
             assert!(
@@ -910,25 +1118,74 @@ mod tests {
     #[test]
     fn blockquote_wrap_preserves_markers() {
         let s = format!("> {}\n", "word ".repeat(30).trim_end());
-        let out = splice_format(&s, 80);
+        let out = splice_format(&s, 80, false);
         for line in out.lines() {
             assert!(line.starts_with("> "), "marker missing: {:?}", line);
         }
         html_eq(&s, &out);
-        assert_eq!(splice_format(&out, 80), out);
+        assert_eq!(splice_format(&out, 80, false), out);
     }
 
     #[test]
     fn hardbreak_splits_wrap_unit() {
         let long = "word ".repeat(30).trim_end().to_string();
         let s = format!("short  \n{}\n", long);
-        let out = splice_format(&s, 80);
+        let out = splice_format(&s, 80, false);
         assert!(
             out.starts_with("short  \n"),
             "hardbreak marker intact: {:?}",
             out
         );
         html_eq(&s, &out);
-        assert_eq!(splice_format(&out, 80), out);
+        assert_eq!(splice_format(&out, 80, false), out);
+    }
+
+    #[test]
+    fn reflow_joins_and_resplits_to_width() {
+        let s = "first short line\nsecond short line\n".to_string()
+            + &("word ".repeat(40).trim_end().to_string() + "\n");
+        let out = splice_format(&s, 80, true);
+        for line in out.lines() {
+            assert!(line.len() <= 80, "line too long: {line:?}");
+        }
+        assert!(
+            out.lines()
+                .next()
+                .is_some_and(|l| l.contains("first short line second short line")),
+            "reflow must join short lines: {out:?}"
+        );
+        // Pins the mode distinction: split-only must NOT produce this.
+        assert_ne!(out, splice_format(&s, 80, false));
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 80, true), out, "reflow fixpoint");
+    }
+
+    #[test]
+    fn reflow_containers_with_indent() {
+        let s = format!("- {}\n", "item word ".repeat(20).trim_end());
+        let out = splice_format(&s, 80, true);
+        for line in out.lines() {
+            assert!(line.len() <= 80, "line too long: {line:?}");
+        }
+        assert!(out.lines().count() > 1, "should split: {out:?}");
+        assert!(
+            out.lines().skip(1).all(|l| l.starts_with("  ")),
+            "continuation indent: {out:?}"
+        );
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 80, true), out, "reflow fixpoint");
+    }
+
+    #[test]
+    fn reflow_hardbreak_units_independent() {
+        let long = "word ".repeat(30).trim_end().to_string();
+        let s = format!("seg one  \n{}\n", long);
+        let out = splice_format(&s, 80, true);
+        assert!(out.starts_with("seg one  \n"), "first unit intact: {out:?}");
+        for line in out.lines() {
+            assert!(line.len() <= 80, "line too long: {line:?}");
+        }
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 80, true), out, "reflow fixpoint");
     }
 }

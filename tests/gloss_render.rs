@@ -241,13 +241,16 @@ fn corpus_loses_no_content() {
 fn formatter_is_idempotent() {
     for path in corpus_inputs() {
         let input = std::fs::read_to_string(&path).expect("read corpus file");
-        let once = format_commonmark(&input, WIDTH);
-        let twice = format_commonmark(&once, WIDTH);
-        assert_eq!(
-            once,
-            twice,
-            "format_commonmark not idempotent for {}",
-            path.file_name().expect("file name").to_string_lossy()
-        );
+        // Both modes must fixpoint; reflow=true is the shipped default.
+        for reflow in [false, true] {
+            let once = format_commonmark(&input, WIDTH, reflow);
+            let twice = format_commonmark(&once, WIDTH, reflow);
+            assert_eq!(
+                once,
+                twice,
+                "format_commonmark not idempotent for {} (reflow={reflow})",
+                path.file_name().expect("file name").to_string_lossy()
+            );
+        }
     }
 }
