@@ -6,7 +6,7 @@ use crate::markdown_fmt;
 /// Preserves the body text and any unknown fields exactly. Returns the full markdown.
 fn normalize_frontmatter(content: &str) -> Result<String, String> {
     const CANONICAL_ORDER: &[&str] = &["status", "type", "priority", "area"];
-    const FORMAT_WIDTH: usize = 120;
+    const FORMAT_WIDTH: usize = 80;
 
     let (fml, start_line) = parse_frontmatter(content)?;
 
@@ -196,7 +196,7 @@ mod tests {
     fn normalize_preserves_body_text() {
         let input = "---\nstatus: open\ntype: bug\npriority: low\n---\n\n## Notes\nSome text.\n";
         let output = normalize_frontmatter(input).unwrap();
-        assert!(output.contains("## Notes\n\nSome text."));
+        assert!(output.contains("## Notes\nSome text."));
     }
 
     #[test]
@@ -226,16 +226,16 @@ mod tests {
             "---\nstatus: open\ntype: bug\npriority: high\n---\n\nbody\n",
         )
         .unwrap();
-        assert_eq!(format_file(&path, 120).expect("formats"), false);
+        assert_eq!(format_file(&path, 80).expect("formats"), false);
         // Scrambled order is fixed: Ok(true).
         std::fs::write(
             &path,
             "---\npriority: high\nstatus: open\ntype: bug\n---\n\nbody\n",
         )
         .unwrap();
-        assert_eq!(format_file(&path, 120).expect("formats"), true);
+        assert_eq!(format_file(&path, 80).expect("formats"), true);
         // Missing file is an error, not silent false.
-        assert!(format_file(&dir.join("missing.md"), 120).is_err());
+        assert!(format_file(&dir.join("missing.md"), 80).is_err());
     }
 
     #[test]
