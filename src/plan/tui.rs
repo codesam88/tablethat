@@ -823,6 +823,7 @@ impl App<'_> {
             ("type", self.filter_type.as_deref()),
             ("priority", self.filter_priority.as_deref()),
             ("area", self.filter_area.as_deref()),
+            ("search", self.browse_title.as_deref()),
         ]
         .into_iter()
         .filter_map(|(k, v)| v.map(|v| (k, v)))
@@ -1100,10 +1101,13 @@ impl App<'_> {
         match key.code {
             KeyCode::Esc => self.cancel_browse_search(),
             KeyCode::Enter => {
+                // Confirm: keep the filter, dismiss the search UI.
                 self.search_mode = false;
+                self.search_query.clear();
             }
             KeyCode::Up | KeyCode::Down => {
                 self.search_mode = false;
+                self.search_query.clear();
                 self.handle_task_key(key.code);
             }
             KeyCode::Backspace => {
@@ -1492,8 +1496,26 @@ mod search_tests {
         app.handle_search_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert!(!app.search_mode, "Up confirms the filter");
         assert_eq!(app.browse_title.as_deref(), Some("a"), "filter kept");
+        assert!(app.search_query.is_empty(), "search UI dismissed");
+        assert_eq!(app.footer_search_line(), None, "status bar restored");
         let last = app.columns.len() - 1;
         assert_eq!((app.selected_column, app.selected_task), (last, 0));
+    }
+
+    #[test]
+    fn enter_confirms_filter_and_restores_status_bar() {
+        let cfg = Box::leak(Box::new(Config::default()));
+        let root = Box::leak(Box::new(std::path::PathBuf::from("/tmp")));
+        let tasks = vec![task("open", "aaa"), task("open", "zzz")];
+        let mut app = App::new(root, cfg, tasks, Vec::new());
+        app.search_mode = true;
+        app.search_query = "a".to_string();
+        app.browse_title = Some("a".to_string());
+        app.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.search_mode);
+        assert_eq!(app.browse_title.as_deref(), Some("a"), "filter kept");
+        assert!(app.search_query.is_empty(), "search UI dismissed");
+        assert_eq!(app.footer_search_line(), None, "status bar restored");
     }
 
     #[test]
