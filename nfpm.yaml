@@ -11,13 +11,6 @@ maintainer: codesam <tedsamhain@gmail.com>
 description: plan + gloss — task management and markdown viewing
 homepage: https://github.com/codesam88/tablethat
 license: MIT OR Apache-2.0
-overrides:
-  deb:
-    depends:
-      - libc6 (>= 2.39)
-  rpm:
-    depends:
-      - glibc >= 2.39
 contents:
   - src: target/release/plan
     dst: /usr/bin/plan

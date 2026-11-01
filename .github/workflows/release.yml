@@ -119,16 +119,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install musl tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Build distro binaries
-        run: cargo build --release
-
       - name: Build static binaries
         env:
-          # musl-gcc links dynamically by default; force static output.
-          RUSTFLAGS: "-C link-arg=-static"
+          # Self-contained musl link: no musl-gcc needed, fully static output.
+          RUSTFLAGS: "-C link-self-contained=yes"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Assert static linking

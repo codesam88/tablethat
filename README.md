@@ -40,9 +40,9 @@ default directories (typically `~/.cargo/bin/` and `~/.config/{plan,gloss}/`).
     make install PREFIX=/usr/local       # system-wide
     make uninstall                       # removes exactly what install added
 
-Prebuilt glibc binaries and distro packages need glibc 2.39+
-(Ubuntu 24.04+, Debian 13+, Fedora 40+); anything older takes
-the static `-musl` tarball, which runs anywhere.
+Prebuilt glibc binaries need glibc 2.39+ (Ubuntu 24.04+, Debian 13+,
+Fedora 40+). The `.deb`/`.rpm` packages and `-musl` tarballs are fully
+static and run anywhere.
 
 ### Development
 
