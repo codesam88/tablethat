@@ -56,6 +56,8 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
@@ -93,7 +95,18 @@ jobs:
 
   package:
     needs: verify
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            nfpm_arch: x86_64
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            nfpm_arch: aarch64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     steps:
@@ -104,7 +117,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.target }}
 
       - name: Install musl tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -113,32 +126,38 @@ jobs:
         env:
           # musl-gcc links dynamically by default; force static output.
           RUSTFLAGS: "-C link-arg=-static"
-        run: cargo build --release --target x86_64-unknown-linux-musl
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Assert static linking
         run: |
-          file target/x86_64-unknown-linux-musl/release/plan
-          file target/x86_64-unknown-linux-musl/release/gloss
-          file target/x86_64-unknown-linux-musl/release/plan | grep -Eq "statically linked|static-pie linked"
-          file target/x86_64-unknown-linux-musl/release/gloss | grep -Eq "statically linked|static-pie linked"
+          file target/${{ matrix.target }}/release/plan
+          file target/${{ matrix.target }}/release/gloss
+          file target/${{ matrix.target }}/release/plan | grep -Eq "statically linked|static-pie linked"
+          file target/${{ matrix.target }}/release/gloss | grep -Eq "statically linked|static-pie linked"
+
+      - name: Stage binaries
+        run: |
+          mkdir -p pkg-bin
+          cp target/${{ matrix.target }}/release/plan target/${{ matrix.target }}/release/gloss pkg-bin/
 
       - name: Install nfpm
         run: |
-          curl -sL -o /tmp/nfpm.tar.gz https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_Linux_x86_64.tar.gz
+          curl -sL -o /tmp/nfpm.tar.gz https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_Linux_${{ matrix.nfpm_arch }}.tar.gz
           tar xzf /tmp/nfpm.tar.gz -C /tmp
           sudo install -m755 /tmp/nfpm /usr/local/bin/nfpm
 
       - name: Build deb and rpm
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}" nfpm package --config nfpm.yaml --packager deb
-          VERSION="${GITHUB_REF#refs/tags/v}" nfpm package --config nfpm.yaml --packager rpm
+          conf=nfpm.yaml; [ "${{ matrix.arch }}" = arm64 ] && conf=nfpm-arm64.yaml
+          VERSION="${GITHUB_REF#refs/tags/v}" nfpm package --config "$conf" --packager deb
+          VERSION="${GITHUB_REF#refs/tags/v}" nfpm package --config "$conf" --packager rpm
           dpkg-deb --field tablethat_*.deb Package Version Architecture
           ls -la tablethat_*.deb tablethat-*.rpm
 
       - name: Upload packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: tablethat-packages
+          name: tablethat-packages-${{ matrix.arch }}
           path: |
             tablethat_*.deb
             tablethat-*.rpm

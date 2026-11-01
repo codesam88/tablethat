@@ -1,0 +1,33 @@
+# tablethat system packages (deb + rpm) from static musl binaries.
+# Built in CI: VERSION comes from the release tag (e.g. 0.1.0),
+# ARCH is amd64 or arm64, sources are staged into pkg-bin/ first.
+name: tablethat
+arch: arm64
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: codesam <tedsamhain@gmail.com>
+description: plan + gloss — task management and markdown viewing
+homepage: https://github.com/codesam88/tablethat
+license: MIT OR Apache-2.0
+contents:
+  - src: pkg-bin/plan
+    dst: /usr/bin/plan
+    type: file
+    file_info: { mode: 0755 }
+  - src: pkg-bin/gloss
+    dst: /usr/bin/gloss
+    type: file
+    file_info: { mode: 0755 }
+  - src: themes/
+    dst: /usr/share/tablethat/themes
+    type: tree
+  - src: README.md
+    dst: /usr/share/doc/tablethat/README.md
+  - src: plan.toml.example
+    dst: /usr/share/doc/tablethat/plan.toml.example
+  - src: LICENSE-MIT
+    dst: /usr/share/doc/tablethat/LICENSE-MIT
+  - src: LICENSE-APACHE
+    dst: /usr/share/doc/tablethat/LICENSE-APACHE
