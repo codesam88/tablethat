@@ -23,6 +23,70 @@ fn strip_trailing_whitespace(text: &str) -> String {
         .join("\n")
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+enum SpliceEdit {
+    StripTrailingWs { line: usize },
+}
+
+#[allow(dead_code)]
+impl SpliceEdit {
+    fn line(self) -> usize {
+        match self {
+            SpliceEdit::StripTrailingWs { line } => line,
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn collect_hardbreak_lines(node: &comrak::Node<'_>, out: &mut std::collections::HashSet<usize>) {
+    if let comrak::nodes::NodeValue::LineBreak = node.data.borrow().value {
+        out.insert(node.data.borrow().sourcepos.end.line);
+    }
+    for child in node.children() {
+        collect_hardbreak_lines(&child, out);
+    }
+}
+
+#[allow(dead_code)]
+/// Conservative splice skeleton (worker 1): strip trailing whitespace,
+/// exempting hardbreak markers. Everything else passes through byte-identical.
+fn splice_format(text: &str, _width: usize) -> String {
+    let arena = comrak::Arena::new();
+    let opts = crate::markdown::comrak_options();
+    let root = comrak::parse_document(&arena, text, &opts);
+
+    let mut hardbreak_lines = std::collections::HashSet::new();
+    collect_hardbreak_lines(&root, &mut hardbreak_lines);
+
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut edits: Vec<SpliceEdit> = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        let lineno = idx + 1;
+        if *line != line.trim_end() && !hardbreak_lines.contains(&lineno) {
+            edits.push(SpliceEdit::StripTrailingWs { line: lineno });
+        }
+    }
+
+    edits.sort_by_key(|e| e.line());
+    for i in 1..edits.len() {
+        assert!(
+            edits[i].line() > edits[i - 1].line(),
+            "splice edits must be sorted and disjoint"
+        );
+    }
+
+    let mut out_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+    for e in &edits {
+        let SpliceEdit::StripTrailingWs { line } = e;
+        let idx = line - 1;
+        if idx < out_lines.len() {
+            out_lines[idx] = out_lines[idx].trim_end().to_string();
+        }
+    }
+    out_lines.join("\n")
+}
+
 fn align_tables(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let mut result = Vec::new();
@@ -134,5 +198,54 @@ mod tests {
             align_tables(input.trim_end_matches('\n')),
             input.trim_end_matches('\n')
         );
+    }
+
+    // ---- splice_format (worker 1) ----
+
+    fn html_eq(input: &str, output: &str) {
+        let opts = crate::markdown::comrak_options();
+        assert_eq!(
+            comrak::markdown_to_html(input, &opts),
+            comrak::markdown_to_html(output, &opts),
+            "HTML must be preserved by splice_format"
+        );
+    }
+
+    #[test]
+    fn trailing_ws_stripped_hardbreak_exempt() {
+        let a = "para  \nnext\n";
+        assert_eq!(splice_format(a, 80), a);
+        html_eq(a, &splice_format(a, 80));
+
+        let b = "trail x  \nnext\n";
+        assert_eq!(splice_format(b, 80), b);
+        html_eq(b, &splice_format(b, 80));
+
+        let c = "trail x \nnext\n";
+        let c_out = "trail x\nnext\n";
+        assert_eq!(splice_format(c, 80), c_out);
+        html_eq(c, &splice_format(c, 80));
+    }
+
+    #[test]
+    fn short_softbreak_lines_preserved() {
+        let s = "First soft line\nsecond soft line\n";
+        assert_eq!(splice_format(s, 80), s);
+        html_eq(s, &splice_format(s, 80));
+    }
+
+    #[test]
+    fn hardbreak_flavors_preserved() {
+        for s in ["a  \nb\n", "a\\\nb\n"] {
+            assert_eq!(splice_format(s, 80), s);
+            html_eq(s, &splice_format(s, 80));
+        }
+    }
+
+    #[test]
+    fn long_line_untouched_without_wrapper() {
+        let s = format!("{}\n", "x".repeat(200));
+        assert_eq!(splice_format(&s, 80), s);
+        html_eq(&s, &splice_format(&s, 80));
     }
 }
