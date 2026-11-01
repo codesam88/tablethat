@@ -45,6 +45,9 @@ default directories (typically `~/.cargo/bin/` and `~/.config/{plan,gloss}/`).
     just setup-dev           # installs audit tools + enables the pre-commit hook
     just precommit           # fmt + clippy + tests (also runs on every commit)
 
+Work goes in via pull requests against `main`, which is protected:
+CI (check, MSRV, audit, workflow lint) must be green to merge.
+
 ## The Tools
 
 ### plan
