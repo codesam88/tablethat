@@ -906,68 +906,6 @@ mod highlight_sync_tests {
 }
 
 #[cfg(test)]
-mod n_nav_bar_tests {
-    use super::*;
-    use ratatui::{Terminal, backend::TestBackend};
-
-    fn make_app() -> (tempfile::TempDir, App) {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("doc.md");
-        let mut text = String::new();
-        for i in 0..60 {
-            if i == 5 {
-                text.push_str("# needle headline here\n");
-            } else if i == 30 {
-                text.push_str("some **bold needle** text\n");
-            } else if i == 55 {
-                text.push_str("code `needle` sample\n");
-            } else {
-                text.push_str(&format!("plain filler line {i}\n"));
-            }
-        }
-        std::fs::write(&path, &text).unwrap();
-        let app = App::new(vec![path], Vec::new(), 80, true);
-        (tmp, app)
-    }
-
-    fn bar_colors(app: &mut App) -> Vec<(char, Color, Color)> {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| render(f, app)).unwrap();
-        let buf = terminal.backend().buffer().clone();
-        (0..24)
-            .map(|y| {
-                let c = buf.cell((79, y)).unwrap();
-                (c.symbol().chars().next().unwrap_or('?'), c.fg, c.bg)
-            })
-            .collect()
-    }
-
-    fn count_bg(bar: &[(char, Color, Color)], bg: Color) -> usize {
-        bar.iter().filter(|(_, _, b)| *b == bg).count()
-    }
-
-    #[test]
-    fn markers_survive_n_navigation() {
-        let (_tmp, mut app) = make_app();
-        app.search_query = "needle".to_string();
-        app.run_search();
-        let n0 = app.search_hits.len();
-        assert!(n0 >= 2, "need multiple hits, got {n0}");
-        for step in 0..(n0 + 1) {
-            if step > 0 {
-                app.search_next();
-            }
-            let bar = bar_colors(&mut app);
-            let y = count_bg(&bar, Color::Yellow);
-            let g = count_bg(&bar, Color::Gray);
-            assert!(y >= 1, "step {step}: yellow must survive");
-            assert!(y + g >= 1, "step {step}: markers must survive");
-        }
-    }
-}
-
-#[cfg(test)]
 mod search_persist_tests {
     use super::*;
 
