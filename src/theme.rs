@@ -70,24 +70,54 @@ pub fn load_themes(themes_dir: Option<&Path>, app_name: &str) -> Vec<ThemeFile> 
     themes
 }
 
+/// Shared user-local themes dir for tarball installs:
+/// `$XDG_DATA_HOME/tablethat/themes`, else `~/.local/share/...`.
+/// Pure helper so the env lookup stays testable without mutating `HOME`.
+fn user_share_themes_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("tablethat/themes")
+}
+
+/// System data dirs per the XDG spec: `$XDG_DATA_DIRS`, defaulting to
+/// `/usr/local/share:/usr/share`. Empty segments are skipped. Pure for
+/// testability; callers pass `env::var("XDG_DATA_DIRS").ok()`.
+fn xdg_data_dirs(raw: Option<&str>) -> Vec<PathBuf> {
+    raw.unwrap_or("/usr/local/share:/usr/share")
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Candidate theme directories in priority order: explicit dir, else
+/// project `./themes/`, user config, user share, then system locations.
+fn theme_search_dirs(themes_dir: Option<&Path>, app_name: &str) -> Vec<PathBuf> {
+    if let Some(dir) = themes_dir {
+        return vec![dir.to_path_buf()];
+    }
+    let mut candidates = vec![PathBuf::from("themes")];
+    if let Some(proj_dirs) = directories::ProjectDirs::from("", "", app_name) {
+        candidates.push(proj_dirs.config_dir().join("themes"));
+    }
+    // User-local share (PREFIX=$HOME/.local installs): honors
+    // $XDG_DATA_HOME, falls back to ~/.local/share.
+    if let Some(base) = directories::BaseDirs::new() {
+        candidates.push(user_share_themes_dir(base.data_dir()));
+    }
+    // System locations for deb/rpm installs (read-only, lowest priority).
+    candidates.extend(
+        xdg_data_dirs(std::env::var("XDG_DATA_DIRS").ok().as_deref())
+            .iter()
+            .map(|d| d.join("tablethat/themes")),
+    );
+    candidates
+}
 /// Like [`load_themes`], but also returns the files that failed to load
 /// as `(path, reason)` pairs instead of only warning about them.
 pub fn load_themes_with_errors(
     themes_dir: Option<&Path>,
     app_name: &str,
 ) -> (Vec<ThemeFile>, Vec<(PathBuf, String)>) {
-    let dirs: Vec<PathBuf> = if let Some(dir) = themes_dir {
-        vec![dir.to_path_buf()]
-    } else {
-        let mut candidates = vec![PathBuf::from("themes")];
-        if let Some(proj_dirs) = directories::ProjectDirs::from("", "", app_name) {
-            candidates.push(proj_dirs.config_dir().join("themes"));
-        }
-        // System locations for deb/rpm installs (read-only, lowest priority).
-        candidates.push(PathBuf::from("/usr/local/share/tablethat/themes"));
-        candidates.push(PathBuf::from("/usr/share/tablethat/themes"));
-        candidates
-    };
+    let dirs = theme_search_dirs(themes_dir, app_name);
 
     let mut themes = Vec::new();
     let mut errors = Vec::new();
@@ -224,5 +254,77 @@ mod tests {
         assert_eq!(theme.code_block_color, Color::Yellow);
         assert_eq!(theme.bold_style, "bold");
         assert_eq!(theme.emphasis_style, "underlined");
+    }
+}
+
+#[cfg(test)]
+mod share_dir_tests {
+    use super::*;
+
+    #[test]
+    fn user_share_dir_nests_tablethat_themes() {
+        assert_eq!(
+            user_share_themes_dir(Path::new("/home/u/.local/share")),
+            PathBuf::from("/home/u/.local/share/tablethat/themes")
+        );
+    }
+}
+
+#[cfg(test)]
+mod share_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn xdg_data_dirs_defaults_and_skips_empties() {
+        assert_eq!(
+            xdg_data_dirs(None),
+            vec![
+                PathBuf::from("/usr/local/share"),
+                PathBuf::from("/usr/share")
+            ]
+        );
+        assert_eq!(
+            xdg_data_dirs(Some("/opt/share::/srv/share")),
+            vec![PathBuf::from("/opt/share"), PathBuf::from("/srv/share")]
+        );
+        assert!(xdg_data_dirs(Some("")).is_empty());
+    }
+
+    #[test]
+    fn search_order_is_xdg_user_then_global() {
+        // Guarded env: only this test writes XDG_DATA_DIRS, nothing else reads it.
+        let saved = std::env::var_os("XDG_DATA_DIRS");
+        unsafe {
+            std::env::remove_var("XDG_DATA_DIRS");
+        }
+        let dirs = theme_search_dirs(None, "nosuchapp38472");
+        match saved {
+            Some(v) => unsafe { std::env::set_var("XDG_DATA_DIRS", v) },
+            None => {}
+        }
+        let names: Vec<String> = dirs
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names[0], "themes");
+        let user = names
+            .iter()
+            .position(|p| p.ends_with("tablethat/themes") && !p.starts_with("/usr/"))
+            .expect("user share candidate");
+        let tail = &names[user + 1..];
+        assert_eq!(
+            tail,
+            &[
+                "/usr/local/share/tablethat/themes",
+                "/usr/share/tablethat/themes"
+            ],
+            "system entries last, XDG order: {names:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_dir_short_circuits_search() {
+        let dirs = theme_search_dirs(Some(Path::new("/x")), "whatever");
+        assert_eq!(dirs, vec![PathBuf::from("/x")]);
     }
 }
