@@ -137,7 +137,7 @@ jobs:
           - arch: arm64
             target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
-            nfpm_arch: aarch64
+            nfpm_arch: arm64
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -171,7 +171,7 @@ jobs:
 
       - name: Install nfpm
         run: |
-          curl -sL -o /tmp/nfpm.tar.gz https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_Linux_${{ matrix.nfpm_arch }}.tar.gz
+          curl -sLf -o /tmp/nfpm.tar.gz https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_Linux_${{ matrix.nfpm_arch }}.tar.gz
           tar xzf /tmp/nfpm.tar.gz -C /tmp
           sudo install -m755 /tmp/nfpm /usr/local/bin/nfpm
 
