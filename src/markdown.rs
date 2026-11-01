@@ -224,7 +224,7 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
     out
 }
 
-fn comrak_options() -> Options<'static> {
+pub(crate) fn comrak_options() -> Options<'static> {
     let mut opts = Options::default();
     opts.extension.table = true;
     opts.extension.tasklist = true;
