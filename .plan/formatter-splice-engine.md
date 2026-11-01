@@ -20,7 +20,10 @@ Done: shared `comrak_options()` constructor (renderer + formatter).
 Requirements v3: configurable prose wrap (default 80, split-only,
 containers wrapped with continuation indent, code spans atomic).
 D-2 confirmed (keep pad-to-width pipe style).
-Next: engine implementation, worker 1 (skeleton + whitespace).
+Implemented (3 worker items, senior-reviewed, all committed):
+skeleton + ws-strip, AST table alignment (incl. nested/quote fix),
+wrap + wiring + old-code deletion. Perf: whole-.plan format ~30ms,
+fixpoint clean. Open: PR checks, then merge decision (user).
 
 ## Plan
 
