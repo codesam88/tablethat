@@ -4,6 +4,9 @@ name: Rolling release
 # For trying the latest features; not kept, not stable. Stable releases
 # stay on version tags (release.yml) and remain GitHub's "latest".
 #
+# Package version is `<last stable release>+head.<short sha>`
+# (e.g. 0.1.1+head.8858f6f), derived in the package job.
+#
 # Triggered by successful CI on main (never on red), so no gate
 # duplication: if CI is green, main is shippable.
 
@@ -163,10 +166,42 @@ jobs:
           sudo install -m755 /tmp/nfpm /usr/local/bin/nfpm
 
       - name: Build deb and rpm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           conf=nfpm.yaml; [ "${{ matrix.arch }}" = arm64 ] && conf=nfpm-arm64.yaml
-          VERSION="0.0.0~head.${GITHUB_SHA::7}" nfpm package --config "$conf" --packager deb
-          VERSION="0.0.0~head.${GITHUB_SHA::7}" nfpm package --config "$conf" --packager rpm
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          # Derive BASE from the last stable release (excluding the floating
+          # `head` prerelease). Prefer the GitHub release API, then git tags,
+          # then Cargo.toml. Validate before use.
+          BASE=""
+          if command -v gh >/dev/null 2>&1; then
+            TAG="$(gh release list --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)"
+            if [ -n "${TAG}" ] && [ "${TAG}" != "null" ]; then
+              BASE="${TAG#v}"
+            fi
+          fi
+          if [ -z "${BASE}" ]; then
+            TAG="$(git describe --tags --match 'v[0-9]*' --exclude 'head' 2>/dev/null || true)"
+            if [ -n "${TAG}" ]; then
+              BASE="${TAG#v}"
+              BASE="${BASE%%-*}"
+            fi
+          fi
+          if [ -z "${BASE}" ]; then
+            BASE="$(grep -m1 '^version[[:space:]]*=' Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
+          fi
+
+          if ! printf '%s\n' "${BASE}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: derived BASE version '${BASE}' does not match ^[0-9]+\\.[0-9]+\\.[0-9]+$" >&2
+            exit 1
+          fi
+
+          VERSION="${BASE}+head.${SHORT_SHA}"
+          echo "VERSION=${VERSION}"
+          VERSION="${VERSION}" nfpm package --config "$conf" --packager deb
+          VERSION="${VERSION}" nfpm package --config "$conf" --packager rpm
           dpkg-deb --field tablethat_*.deb Package Version Architecture
           ls -la tablethat_*.deb tablethat-*.rpm
 
