@@ -1,5 +1,6 @@
 # tablethat system packages, arm64 twin of nfpm.yaml (keep in sync).
-# Built in CI: VERSION comes from the release tag (e.g. 0.1.0),
+# Built in CI: VERSION is supplied by the workflow (release tag for stable
+# releases; last stable release + head.<short sha> for rolling builds),
 # ARCH is amd64 or arm64, sources are staged into pkg-bin/ first.
 name: tablethat
 arch: arm64
