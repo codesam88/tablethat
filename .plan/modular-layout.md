@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 type: chore
 priority: medium
 area: backend
@@ -67,6 +67,10 @@ churn, settled in `9dd6d68`).
 
 ## Progress (newest first)
 
+- 2026-11-03: CLOSED by parent. All steps 1-6 checked, acceptance verified on
+  chore/drop-saphyr-brief: no `#[path]` in tree (`grep` clean), `just precommit`
+  green, bins reference only `tablethat_lib::`, no dup helpers. God-file item
+  in maintenance-hardening now satisfied.
 - 2026-10-31: Step 6 DONE (worker, reviewed). Both mains are clap structs
   - `run() -> Result<(), String>` with one exit point each (`plan:` / `gloss:` prefix). Stderr-evidence check justified
     the prefix (e2e pins codes + stdout only). All steps complete: 107 tests green, no `#[path]`, no dup helpers, bins
