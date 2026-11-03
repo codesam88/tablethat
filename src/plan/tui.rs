@@ -789,9 +789,9 @@ impl App<'_> {
             return;
         }
         let done_hint = if self.hide_done {
-            "h:show-done"
+            "H:show-done"
         } else {
-            "h:hide-done"
+            "H:hide-done"
         };
         let text = format!(
             " Enter:view  f:filter  /:search  e:edit  {done_hint}  {}  Ctrl-c:quit ",
@@ -970,7 +970,7 @@ impl App<'_> {
                                 }
                                 Action::None
                             }
-                            KeyCode::Char('h') => {
+                            KeyCode::Char('H') => {
                                 self.hide_done = !self.hide_done;
                                 self.reload_tasks();
                                 Action::None
