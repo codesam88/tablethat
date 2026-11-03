@@ -123,6 +123,7 @@ struct App<'a> {
     /// Live slug-substring filter from `/` search (titles only, unlike
     /// `filter_search` which also matches bodies).
     browse_title: Option<String>,
+    search_fulltext: bool,
     hide_done: bool,
     esc_armed_at: Option<Instant>,
     mode: Mode,
@@ -183,6 +184,7 @@ impl<'a> App<'a> {
             filter_area: None,
             filter_search: None,
             browse_title: None,
+            search_fulltext: false,
             hide_done: cfg.hide_done,
             esc_armed_at: None,
             mode: Mode::Browse,
@@ -214,17 +216,26 @@ impl<'a> App<'a> {
         } else {
             vec![]
         };
+        // Fulltext browse search (`/`) matches slug OR body via
+        // load_and_filter_tasks; slug-only browse search (`l`) matches slugs
+        // only via the retain below.
+        let search_for_load = if self.search_fulltext && self.browse_title.is_some() {
+            self.browse_title.as_deref()
+        } else {
+            self.filter_search.as_deref()
+        };
         self.tasks = crate::plan::query::load_and_filter_tasks(
             &self.entries,
             self.filter_status.as_deref(),
             self.filter_type.as_deref(),
             self.filter_priority.as_deref(),
             self.filter_area.as_deref(),
-            self.filter_search.as_deref(),
+            search_for_load,
             &exclude,
         );
-        // Live `/` search matches titles (slugs) only, never bodies.
-        if let Some(q) = &self.browse_title {
+        if !self.search_fulltext
+            && let Some(q) = &self.browse_title
+        {
             let ql = q.to_lowercase();
             self.tasks.retain(|t| t.slug.to_lowercase().contains(&ql));
         }
@@ -263,6 +274,7 @@ impl<'a> App<'a> {
         self.filter_area = None;
         self.filter_search = None;
         self.browse_title = None;
+        self.search_fulltext = false;
         self.search_query.clear();
         self.search_mode = false;
         self.hide_done = self.cfg.hide_done;
@@ -810,7 +822,7 @@ impl App<'_> {
             "h:hide-done"
         };
         let text = format!(
-            " Enter:view  f:filter  /:search  e:edit  {done_hint}  {}  Ctrl-c:quit ",
+            " Enter:view  l:limit  f:filter  /:search  e:edit  {done_hint}  {}  Ctrl-c:quit ",
             if self.has_active_filters() {
                 "q:clear-filters"
             } else {
@@ -965,7 +977,17 @@ impl App<'_> {
                                 Action::None
                             }
                             KeyCode::Char('e') if !self.columns.is_empty() => Action::OpenEditor,
+                            KeyCode::Char('l') => {
+                                self.search_fulltext = false;
+                                self.search_mode = true;
+                                self.search_query.clear();
+                                self.filter_search = None;
+                                self.browse_title = None;
+                                self.reload_tasks();
+                                Action::None
+                            }
                             KeyCode::Char('/') => {
+                                self.search_fulltext = true;
                                 self.search_mode = true;
                                 self.search_query.clear();
                                 self.filter_search = None;
@@ -1087,6 +1109,7 @@ impl App<'_> {
         self.search_mode = false;
         self.search_query.clear();
         self.browse_title = None;
+        self.search_fulltext = false;
         self.reload_tasks();
     }
 
@@ -1456,6 +1479,18 @@ mod search_tests {
         let slugs: Vec<&str> = app.tasks.iter().map(|t| t.slug.as_str()).collect();
         // "xyz" matches 'b'/'c' only via its body — must be excluded.
         assert_eq!(slugs, vec!["abc"]);
+    }
+
+    #[test]
+    fn typing_filters_fulltext_when_flag_set() {
+        let (_tmp, mut app) = app_with_files();
+        assert_eq!(app.tasks.len(), 2);
+        app.search_fulltext = true;
+        app.search_mode = true;
+        app.handle_search_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        let slugs: Vec<&str> = app.tasks.iter().map(|t| t.slug.as_str()).collect();
+        // "xyz" matches via body ("mentions"); "abc" does not.
+        assert_eq!(slugs, vec!["xyz"]);
     }
 
     #[test]
