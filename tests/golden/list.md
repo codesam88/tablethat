@@ -2,6 +2,8 @@
 - This is a much longer list item that will definitely wrap at eighty columns and continue with a hanging indent
 - [x] A done task item
 - [ ] An open task item with enough text to wrap onto a second line cleanly
+- Term: a described item
+- [x] Status: done task with desc
 
 1. First ordered item
 2. Second ordered item

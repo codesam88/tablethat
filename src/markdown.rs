@@ -68,26 +68,6 @@ pub fn strip_frontmatter(text: &str) -> &str {
     text
 }
 
-fn wrap_lines(text: &str, max: usize) -> Vec<String> {
-    if text.len() <= max {
-        return vec![text.to_string()];
-    }
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    for word in text.split_inclusive(' ') {
-        if cur.len() + word.trim_end().len() > max && !cur.is_empty() {
-            out.push(cur.trim_end().to_string());
-            cur = word.trim_start().to_string();
-        } else {
-            cur.push_str(word);
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur.trim_end().to_string());
-    }
-    out
-}
-
 /// Reflow styled spans to `max` columns, preserving style boundaries.
 /// Break only at spaces or the `](` link seam (`]` stays left, `(` right);
 /// bracket groups (`(word)`, `[word]`, nested) never split — depth is tracked
@@ -301,6 +281,113 @@ fn render_inline(
             }
         }
     }
+}
+
+/// Trim trailing whitespace from a wrapped line's spans (parity with wrap_lines).
+fn trim_trailing_spaces(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    let mut out = spans;
+    while let Some(last) = out.last() {
+        if last.content.is_empty() {
+            out.pop();
+        } else {
+            break;
+        }
+    }
+    if let Some(last) = out.last_mut() {
+        let trimmed = last.content.trim_end();
+        if trimmed.len() != last.content.len() {
+            if trimmed.is_empty() {
+                out.pop();
+            } else {
+                last.content = trimmed.to_string().into();
+            }
+        }
+    }
+    out
+}
+
+/// Patch a description term (if any) in a list item's body spans to the
+/// verbatim/code color + bold. Returns the (possibly unchanged) spans.
+fn highlight_desc_term(mut body: Vec<Span<'static>>, th: &MarkdownTheme) -> Vec<Span<'static>> {
+    let body_text: String = body.iter().map(|s| s.content.as_ref()).collect();
+    let chars: Vec<char> = body_text.chars().collect();
+
+    // Find first separator colon: followed by space, or at end-of-content.
+    let mut sep_idx: Option<usize> = None;
+    for (i, c) in chars.iter().enumerate() {
+        if *c == ':' {
+            let next_ok = i + 1 == chars.len() || chars[i + 1] == ' ';
+            if next_ok {
+                sep_idx = Some(i);
+                break;
+            }
+        }
+    }
+
+    let Some(si) = sep_idx else {
+        return body;
+    };
+
+    // Term = trimmed text before separator.
+    let before: &[char] = &chars[..si];
+    let start = before
+        .iter()
+        .position(|c| !c.is_whitespace())
+        .unwrap_or(before.len());
+    let end = before
+        .iter()
+        .rposition(|c| !c.is_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(start);
+
+    let term_len = end.saturating_sub(start);
+    if term_len == 0 || term_len > 36 {
+        return body;
+    }
+
+    let desc_style = th.code.add_modifier(Modifier::BOLD);
+
+    // Patch spans overlapping [start, end).
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut offset = 0usize;
+    for span in body.drain(..) {
+        let content = span.content.as_ref();
+        let span_chars: Vec<char> = content.chars().collect();
+        let n = span_chars.len();
+        let span_start = offset;
+        let span_end = offset + n;
+        offset = span_end;
+
+        let ov_start = span_start.max(start);
+        let ov_end = span_end.min(end);
+        if ov_start >= ov_end {
+            out.push(span);
+            continue;
+        }
+
+        let local_ov_start = ov_start - span_start;
+        let local_ov_end = ov_end - span_start;
+
+        if local_ov_start > 0 {
+            let before_str: String = span_chars[..local_ov_start].iter().collect();
+            out.push(Span::styled(before_str, span.style));
+        }
+
+        let term_str: String = span_chars[local_ov_start..local_ov_end].iter().collect();
+        let mut term_style = span.style;
+        if let Some(fg) = desc_style.fg {
+            term_style = term_style.fg(fg);
+        }
+        term_style = term_style.add_modifier(Modifier::BOLD);
+        out.push(Span::styled(term_str, term_style));
+
+        if local_ov_end < n {
+            let after_str: String = span_chars[local_ov_end..].iter().collect();
+            out.push(Span::styled(after_str, span.style));
+        }
+    }
+
+    out
 }
 
 fn render_table(node: &comrak::Node<'_>, lines: &mut Vec<Line<'static>>, ascii: bool) {
@@ -567,49 +654,65 @@ fn render_node(
             lines.push(Line::from(""));
         }
         NodeValue::Item(_list) => {
-            let mut item_text = String::new();
+            let mut body: Vec<Span<'static>> = Vec::new();
+            render_inline(node, th, &mut body, Style::default());
 
-            for child in node.children() {
-                item_text.push_str(&collect_text(&child));
+            let body_text: String = body.iter().map(|s| s.content.as_ref()).collect();
+            if body_text.trim().is_empty() {
+                return;
             }
 
-            let content = item_text.trim();
-            if !content.is_empty() {
-                let prefix = "  - ";
-                let first = format!("{}{}", prefix, content);
-                let lw = if wrap < 40 { 78 } else { wrap };
-                for (i, seg) in wrap_lines(&first, lw).iter().enumerate() {
-                    let s: String = if i == 0 {
-                        seg.into()
-                    } else {
-                        format!("    {}", seg)
-                    };
-                    lines.push(Line::from(s));
+            // Description-term highlight: "- <desc>: <content>".
+            let body = highlight_desc_term(body, th);
+
+            let prefix = "  - ";
+            let lw = if wrap < 40 { 78 } else { wrap };
+            let content_width = lw.saturating_sub(prefix.len()).max(1);
+            let wrapped = wrap_spans(&body, content_width);
+            for (i, line_spans) in wrapped.into_iter().enumerate() {
+                let line_spans = trim_trailing_spaces(line_spans);
+                if i == 0 {
+                    let mut first = vec![Span::styled(prefix.to_string(), Style::default())];
+                    first.extend(line_spans);
+                    lines.push(Line::from(first));
+                } else {
+                    let mut indented = vec![Span::styled("    ".to_string(), Style::default())];
+                    indented.extend(line_spans);
+                    lines.push(Line::from(indented));
                 }
             }
         }
         NodeValue::TaskItem(task) => {
             let checked = task.symbol == Some('x') || task.symbol == Some('X');
-            let mut item_text = String::new();
+            let mut body: Vec<Span<'static>> = Vec::new();
+            render_inline(node, th, &mut body, Style::default());
 
-            for child in node.children() {
-                item_text.push_str(&collect_text(&child));
-            }
-
-            let content = item_text.trim();
             let check_mark = if checked { "[x]" } else { "[ ]" };
             let prefix = format!("  - {} ", check_mark);
             let indent_sz = prefix.len();
-            let first = format!("{}{}", prefix, content);
             let indent = " ".repeat(indent_sz);
+
+            let body_text: String = body.iter().map(|s| s.content.as_ref()).collect();
+            let body = if body_text.trim().is_empty() {
+                body
+            } else {
+                highlight_desc_term(body, th)
+            };
+
             let lw = if wrap < 40 { 78 } else { wrap };
-            for (i, seg) in wrap_lines(&first, lw).iter().enumerate() {
-                let s: String = if i == 0 {
-                    seg.into()
+            let content_width = lw.saturating_sub(prefix.len()).max(1);
+            let wrapped = wrap_spans(&body, content_width);
+            for (i, line_spans) in wrapped.into_iter().enumerate() {
+                let line_spans = trim_trailing_spaces(line_spans);
+                if i == 0 {
+                    let mut first = vec![Span::styled(prefix.clone(), Style::default())];
+                    first.extend(line_spans);
+                    lines.push(Line::from(first));
                 } else {
-                    format!("{}{}", indent, seg)
-                };
-                lines.push(Line::from(s));
+                    let mut indented = vec![Span::styled(indent.clone(), Style::default())];
+                    indented.extend(line_spans);
+                    lines.push(Line::from(indented));
+                }
             }
         }
         NodeValue::CodeBlock(code_block) => {
@@ -1230,6 +1333,170 @@ mod tests {
             lines.iter().any(|l| l.contains("([])")),
             "Adjacent bracket groups should be on same line, got: {:?}",
             lines
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Description-term highlighting for bullet lists
+    // ---------------------------------------------------------------------
+
+    fn desc_style(th: &MarkdownTheme) -> Style {
+        th.code.add_modifier(Modifier::BOLD)
+    }
+
+    #[test]
+    fn desc_highlight_basic_bullet() {
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let md = "- Foo: bar baz\n";
+        let lines = render_markdown(&th, md, 80, false);
+        let line = &lines[0];
+        let foo = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "Foo")
+            .expect("term span");
+        assert_eq!(foo.style.fg, desc_style(&th).fg);
+        assert!(foo.style.add_modifier.contains(Modifier::BOLD));
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "  - Foo: bar baz");
+    }
+
+    #[test]
+    fn desc_highlight_checkbox_variant() {
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let md = "- [x] Foo: bar\n";
+        let lines = render_markdown(&th, md, 80, false);
+        let line = &lines[0];
+        let foo = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "Foo")
+            .expect("term span");
+        assert_eq!(foo.style.fg, desc_style(&th).fg);
+        assert!(foo.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn desc_highlight_overlong_plain() {
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let term = "a".repeat(37);
+        let md = format!("- {}: content\n", term);
+        let lines = render_markdown(&th, &md, 80, false);
+        let line = &lines[0];
+        // No span should carry desc (code) fg + bold.
+        assert!(
+            !line.spans.iter().any(|s| s.style.fg == desc_style(&th).fg
+                && s.style.add_modifier.contains(Modifier::BOLD)),
+            "overlong term must not be highlighted"
+        );
+    }
+
+    #[test]
+    fn desc_highlight_no_separator_plain() {
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let md = "- foo bar baz\n";
+        let lines = render_markdown(&th, md, 80, false);
+        let line = &lines[0];
+        // no span should carry code fg from desc highlighting
+        assert!(
+            !line.spans.iter().any(|s| s.style.fg == desc_style(&th).fg
+                && s.style.add_modifier.contains(Modifier::BOLD)),
+            "no desc highlight expected"
+        );
+    }
+
+    #[test]
+    fn desc_highlight_bold_term_composition() {
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let md = "- **Foo**: bar\n";
+        let lines = render_markdown(&th, md, 80, false);
+        let line = &lines[0];
+        let foo = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "Foo")
+            .expect("term span");
+        assert_eq!(foo.style.fg, desc_style(&th).fg);
+        assert!(foo.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn desc_highlight_link_at_start_preserves_underline() {
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let md = "- [text](http://example.com): content\n";
+        let lines = render_markdown(&th, md, 80, false);
+        let line = &lines[0];
+        let t = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "text")
+            .expect("term span");
+        assert_eq!(t.style.fg, desc_style(&th).fg);
+        assert!(t.style.add_modifier.contains(Modifier::BOLD));
+        assert!(t.style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn desc_highlight_nested_colon_first_wins() {
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let md = "- a: b: c\n";
+        let lines = render_markdown(&th, md, 80, false);
+        let line = &lines[0];
+        let a = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "a")
+            .expect("term span");
+        assert_eq!(a.style.fg, desc_style(&th).fg);
+        assert!(a.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn desc_highlight_empty_content() {
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let md = "- desc:\n";
+        let lines = render_markdown(&th, md, 80, false);
+        let line = &lines[0];
+        let d = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "desc")
+            .expect("term span");
+        assert_eq!(d.style.fg, desc_style(&th).fg);
+        assert!(d.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn desc_highlight_url_time_colons_no_match() {
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let md = "- note: see https://example.com at 12:30\n";
+        let lines = render_markdown(&th, md, 80, false);
+        let line = &lines[0];
+        let note = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "note")
+            .expect("term span");
+        assert_eq!(note.style.fg, desc_style(&th).fg);
+        // url/time colon should not create another highlighted term
+        assert!(
+            !line
+                .spans
+                .iter()
+                .any(|s| s.content.as_ref() == "example.com" && s.style.fg == desc_style(&th).fg)
+        );
+    }
+
+    #[test]
+    fn desc_highlight_url_only_plain() {
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let md = "- http://example.com\n";
+        let lines = render_markdown(&th, md, 80, false);
+        let line = &lines[0];
+        assert!(
+            !line.spans.iter().any(|s| s.style.fg == desc_style(&th).fg
+                && s.style.add_modifier.contains(Modifier::BOLD)),
+            "no desc highlight expected"
         );
     }
 }
