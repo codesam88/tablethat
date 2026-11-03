@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 type: chore
 priority: high
 area: devops
@@ -24,7 +24,7 @@ Repo health check 2026-10-31: `just check` pass, `cargo test` 59 pass, `cargo au
 
 ## Solution strategy
 
-Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawback of rename is it keeps c2rust-transpiled `libyaml-rs` unsafe. Rejected `serde_yaml_ng` (still `unsafe-libyaml`). Order: 1B, 3, 4, 5, 6, 2-watch. See `docs/briefs/serde-saphyr.md` for tool digest.
+Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawback of rename is it keeps c2rust-transpiled `libyaml-rs` unsafe. Rejected `serde_yaml_ng` (still `unsafe-libyaml`). Order: 1B, 3, 4, 5, 6, 2-watch. History in CHANGELOG + Progress below (brief removed as basic-crate noise).
 
 ## Implementation steps
 
@@ -33,7 +33,7 @@ Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawba
 - [x] Step 3 (4A+B): gloss resolution + editor splitting.
 - [x] Step 4 (5A+B): config/theme warnings + `Result` propagation.
 - [x] Step 5 (6A+B+C): workflow permissions + dependabot + release attestation.
-- [ ] Step 6 (2A): `lru` fixed upstream — monitor via daily `audit.yml` (no action; `cargo audit` currently shows 1 allowed warning).
+- [x] Step 6 (2A): `lru` fixed upstream — monitor via daily `audit.yml` (no action; `cargo audit` currently shows 1 allowed warning).
 
 ## Security (labels: [class|severity|effort])
 
@@ -63,6 +63,13 @@ Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive drawba
 
 ## Progress (newest first)
 
+- 2026-11-03: CLOSED by parent on chore/drop-saphyr-brief. Step 6 (lru watch)
+  verified done: `cargo audit` clean (272 crates, 0 vulnerabilities), `cargo deny
+  check` passes (advisories/bans/licenses/sources ok), `lru@0.18.5` via
+  ratatui-core no longer flagged. All steps 1-6 + Security/DevOps/Quality boxes
+  checked. Also dropped `docs/briefs/serde-saphyr.md` (basic crate, brief
+  unneeded; history in CHANGELOG + this file) and closed modular-layout
+  (god-file item satisfied).
 - 2026-10-31: Layout track DONE (plan: `.plan/modular-layout.md`, all steps
   checked). tasks.rs deleted (6 modules, 122-390 lines), lib.rs split
   (11 lines), no `#[path]`, no dup helpers, mains are parse + `run()`.
