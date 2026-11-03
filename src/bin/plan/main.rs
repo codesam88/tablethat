@@ -267,7 +267,8 @@ fn run(cli: Cli) -> Result<(), String> {
                 priority.as_deref(),
                 area.as_deref(),
                 search.as_deref(),
-            );
+            )
+            .map_err(err_chain)?;
             Ok(())
         }
         Some(Commands::Init) => {
@@ -375,6 +376,17 @@ fn run(cli: Cli) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+fn err_chain(e: Box<dyn std::error::Error>) -> String {
+    let mut msg = e.to_string();
+    let mut cur = e.source();
+    while let Some(s) = cur {
+        msg.push_str(": ");
+        msg.push_str(&s.to_string());
+        cur = s.source();
+    }
+    msg
 }
 
 fn main() {

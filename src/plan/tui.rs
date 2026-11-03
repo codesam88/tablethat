@@ -323,7 +323,7 @@ pub fn run_tui(
     priority_filter: Option<&str>,
     area_filter: Option<&str>,
     search_query: Option<&str>,
-) {
+) -> Result<(), Box<dyn std::error::Error>> {
     let tasks_dir = root.join(".plan");
     let entries = crate::plan::store::read_task_files(&tasks_dir).unwrap_or_default();
     let exclude: Vec<String> = if cfg.hide_done {
@@ -343,29 +343,23 @@ pub fn run_tui(
 
     if tasks.is_empty() {
         eprintln!("(no tasks match filters)");
-        return;
+        return Ok(());
     }
 
     let mut app = App::new(root, cfg, tasks, entries);
-    let mut terminal = match ratatui::try_init() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("failed to init terminal: {e}");
-            return;
-        }
-    };
+    let mut terminal =
+        ratatui::try_init().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
-    while !app.quit {
-        if let Err(e) = terminal.draw(|frame| app.render(frame)) {
-            if let Ok(t) = ratatui::try_init() {
-                terminal = t;
-            } else {
-                eprintln!("render error: {e}");
-                break;
+    let outcome = (|| -> Result<(), Box<dyn std::error::Error>> {
+        while !app.quit {
+            if let Err(e) = terminal.draw(|frame| app.render(frame)) {
+                match ratatui::try_init() {
+                    Ok(t) => terminal = t,
+                    Err(_) => return Err(Box::new(e)),
+                }
             }
-        }
-        match app.handle_events() {
-            Ok(action) => match action {
+            let action = app.handle_events()?;
+            match action {
                 Action::None => {}
                 Action::Quit => break,
                 Action::OpenGloss => {
@@ -383,12 +377,8 @@ pub fn run_tui(
                         {
                             eprintln!("gloss exited with code: {:?}", s.code());
                         }
-                        if let Ok(t) = ratatui::try_init() {
-                            terminal = t;
-                        } else {
-                            eprintln!("failed to re-init terminal after gloss");
-                            break;
-                        }
+                        terminal = ratatui::try_init()
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
                     }
                 }
                 Action::OpenEditor => {
@@ -408,23 +398,17 @@ pub fn run_tui(
                         {
                             eprintln!("{editor} exited with code: {:?}", s.code());
                         }
-                        if let Ok(t) = ratatui::try_init() {
-                            terminal = t;
-                        } else {
-                            eprintln!("failed to re-init terminal after editor");
-                            break;
-                        }
+                        terminal = ratatui::try_init()
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
                     }
                 }
-            },
-            Err(e) => {
-                eprintln!("event error: {e}");
-                break;
             }
         }
-    }
+        Ok(())
+    })();
 
     ratatui::restore();
+    outcome
 }
 
 impl App<'_> {
@@ -817,9 +801,9 @@ impl App<'_> {
             return;
         }
         let done_hint = if self.hide_done {
-            "h:show-done"
+            "H:show-done"
         } else {
-            "h:hide-done"
+            "H:hide-done"
         };
         let text = format!(
             " Enter:view  l:limit  f:filter  /:search  e:edit  {done_hint}  {}  Ctrl-c:quit ",
@@ -867,10 +851,37 @@ impl App<'_> {
 
 impl App<'_> {
     fn handle_events(&mut self) -> Result<Action, Box<dyn std::error::Error>> {
-        if !event::poll(std::time::Duration::from_millis(100))? {
+        // crossterm's poll/read can surface a transient io::ErrorKind::Interrupted
+        // during a tmux SIGWINCH/resize race. Treat only that kind as "no action
+        // this poll" so the loop retries; propagate every other error as fatal.
+        let polled = match event::poll(std::time::Duration::from_millis(100)) {
+            Ok(b) => b,
+            Err(e) => {
+                let boxed: Box<dyn std::error::Error> = Box::new(e);
+                if let Some(io_err) = boxed.downcast_ref::<std::io::Error>()
+                    && io_err.kind() == std::io::ErrorKind::Interrupted
+                {
+                    return Ok(Action::None);
+                }
+                return Err(boxed);
+            }
+        };
+        if !polled {
             return Ok(Action::None);
         }
-        match event::read()? {
+        let ev = match event::read() {
+            Ok(e) => e,
+            Err(e) => {
+                let boxed: Box<dyn std::error::Error> = Box::new(e);
+                if let Some(io_err) = boxed.downcast_ref::<std::io::Error>()
+                    && io_err.kind() == std::io::ErrorKind::Interrupted
+                {
+                    return Ok(Action::None);
+                }
+                return Err(boxed);
+            }
+        };
+        match ev {
             Event::Resize(_, _) => {}
             Event::Key(key) => {
                 if key.kind != KeyEventKind::Press {
@@ -971,7 +982,7 @@ impl App<'_> {
                                 }
                                 Action::None
                             }
-                            KeyCode::Char('h') => {
+                            KeyCode::Char('H') => {
                                 self.hide_done = !self.hide_done;
                                 self.reload_tasks();
                                 Action::None
