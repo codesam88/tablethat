@@ -63,13 +63,15 @@ fn run(cli: Cli) -> Result<(), String> {
     match cli.path {
         // TUI mode: file or directory argument provided, or no arg but tty
         Some(path) if path.is_file() => {
-            tablethat_lib::gloss::tui::run_file_viewer(&path, &cfg, &themes, 0, width, scrollbar);
+            tablethat_lib::gloss::tui::run_file_viewer(&path, &cfg, &themes, 0, width, scrollbar)
+                .map_err(err_chain)?;
             Ok(())
         }
         Some(path) if path.is_dir() => {
             tablethat_lib::gloss::tui::run_directory_browser(
                 &path, &cfg, &themes, width, scrollbar,
-            );
+            )
+            .map_err(err_chain)?;
             Ok(())
         }
         Some(path) => Err(format!("{}: not a file or directory", path.display())),
@@ -81,10 +83,22 @@ fn run(cli: Cli) -> Result<(), String> {
         // No arg + tty: browse .md files in cwd
         None => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            tablethat_lib::gloss::tui::run_directory_browser(&cwd, &cfg, &themes, width, scrollbar);
+            tablethat_lib::gloss::tui::run_directory_browser(&cwd, &cfg, &themes, width, scrollbar)
+                .map_err(err_chain)?;
             Ok(())
         }
     }
+}
+
+fn err_chain(e: Box<dyn std::error::Error>) -> String {
+    let mut msg = e.to_string();
+    let mut cur = e.source();
+    while let Some(s) = cur {
+        msg.push_str(": ");
+        msg.push_str(&s.to_string());
+        cur = s.source();
+    }
+    msg
 }
 
 fn main() {

@@ -378,12 +378,12 @@ pub fn run_file_viewer(
     initial_theme: usize,
     width: usize,
     scrollbar: bool,
-) {
+) -> Result<(), Box<dyn std::error::Error>> {
     let files = vec![path.to_path_buf()];
     let mut app = App::new(files, themes.to_vec(), width, scrollbar);
     app.current_theme = initial_theme;
     app.load_selected();
-    run_tui(&mut app, cfg);
+    run_tui(&mut app, cfg)
 }
 
 /// Run directory browser TUI
@@ -393,74 +393,67 @@ pub fn run_directory_browser(
     themes: &[lib::theme::ThemeFile],
     width: usize,
     scrollbar: bool,
-) {
+) -> Result<(), Box<dyn std::error::Error>> {
     let files = match lib::plan::store::sorted_md_entries(dir) {
         Ok(files) => files,
         Err(e) => {
-            eprintln!("gloss: {e}");
-            return;
+            return Err(std::io::Error::other(e).into());
         }
     };
 
     if files.is_empty() {
-        eprintln!("no .md files found in {}", dir.display());
-        return;
+        return Err(
+            std::io::Error::other(format!("no .md files found in {}", dir.display())).into(),
+        );
     }
 
     let mut app = App::new(files, themes.to_vec(), width, scrollbar);
-    run_tui(&mut app, cfg);
+    run_tui(&mut app, cfg)
 }
 
-fn run_tui(app: &mut App, cfg: &lib::Config) {
-    let mut terminal = match ratatui::try_init() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("failed to init terminal: {e}");
-            return;
-        }
-    };
+fn run_tui(app: &mut App, cfg: &lib::Config) -> Result<(), Box<dyn std::error::Error>> {
+    let mut terminal =
+        ratatui::try_init().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
 
-    while !app.quit {
-        if let Err(e) = terminal.draw(|frame| render(frame, app)) {
-            if let Ok(t) = ratatui::try_init() {
-                terminal = t;
-            } else {
-                eprintln!("render error: {e}");
-                break;
-            }
-        }
-        match handle_events(app, cfg) {
-            Ok(Action::OpenEditor) => {
-                if let Some(path) = app.current_file().map(|p| p.to_path_buf()) {
-                    let (editor, editor_args) = lib::launch::editor_command();
-                    let line_flag = lib::launch::editor_line_flag(&editor, Some(app.scroll + 1));
-                    ratatui::restore();
-                    let _ = std::process::Command::new(&editor)
-                        .args(&editor_args)
-                        .args(&line_flag)
-                        .arg(&path)
-                        .status();
-                    app.load_selected();
-                    terminal = match ratatui::try_init() {
-                        Ok(t) => t,
-                        Err(e) => {
-                            eprintln!("failed to reinit terminal: {e}");
-                            break;
-                        }
-                    };
+    let outcome = (|| -> Result<(), Box<dyn std::error::Error>> {
+        while !app.quit {
+            if let Err(e) = terminal.draw(|frame| render(frame, app)) {
+                // One re-init attempt on a draw failure (e.g. transient resize
+                // race); if that also fails, propagate the original error
+                // instead of swallowing it.
+                match ratatui::try_init() {
+                    Ok(t) => terminal = t,
+                    Err(_) => return Err(Box::new(e)),
                 }
             }
-            Ok(Action::None) => {}
-            Err(e) => {
-                eprintln!("event error: {e}");
-                break;
+            match handle_events(app, cfg) {
+                Ok(Action::OpenEditor) => {
+                    if let Some(path) = app.current_file().map(|p| p.to_path_buf()) {
+                        let (editor, editor_args) = lib::launch::editor_command();
+                        let line_flag =
+                            lib::launch::editor_line_flag(&editor, Some(app.scroll + 1));
+                        ratatui::restore();
+                        let _ = std::process::Command::new(&editor)
+                            .args(&editor_args)
+                            .args(&line_flag)
+                            .arg(&path)
+                            .status();
+                        app.load_selected();
+                        terminal = ratatui::try_init()
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+                    }
+                }
+                Ok(Action::None) => {}
+                Err(e) => return Err(e),
             }
         }
-    }
+        Ok(())
+    })();
 
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
+    outcome
 }
 
 enum Action {
@@ -619,10 +612,37 @@ fn handle_search_input(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_events(app: &mut App, _cfg: &lib::Config) -> Result<Action, Box<dyn std::error::Error>> {
-    if !event::poll(std::time::Duration::from_millis(100))? {
+    // crossterm's poll/read can surface a transient io::ErrorKind::Interrupted
+    // during a tmux SIGWINCH/resize race. Treat only that kind as "no action
+    // this poll" so the loop retries; propagate every other error as fatal.
+    let polled = match event::poll(std::time::Duration::from_millis(100)) {
+        Ok(b) => b,
+        Err(e) => {
+            let boxed: Box<dyn std::error::Error> = Box::new(e);
+            if let Some(io_err) = boxed.downcast_ref::<std::io::Error>()
+                && io_err.kind() == std::io::ErrorKind::Interrupted
+            {
+                return Ok(Action::None);
+            }
+            return Err(boxed);
+        }
+    };
+    if !polled {
         return Ok(Action::None);
     }
-    match event::read()? {
+    let ev = match event::read() {
+        Ok(e) => e,
+        Err(e) => {
+            let boxed: Box<dyn std::error::Error> = Box::new(e);
+            if let Some(io_err) = boxed.downcast_ref::<std::io::Error>()
+                && io_err.kind() == std::io::ErrorKind::Interrupted
+            {
+                return Ok(Action::None);
+            }
+            return Err(boxed);
+        }
+    };
+    match ev {
         Event::Resize(_, _) => {
             app.resize_to_terminal();
         }
