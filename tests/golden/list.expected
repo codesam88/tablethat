@@ -3,6 +3,8 @@
     and continue with a hanging indent
   - [x] A done task item
   - [ ] An open task item with enough text to wrap onto a second line cleanly
+  - Term: a described item
+  - [x] Status: done task with desc
 
   - First ordered item
   - Second ordered item

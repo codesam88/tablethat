@@ -83,6 +83,16 @@ const CASES: &[(&str, &str, usize, &[&str])] = &[
         ],
     ),
     (
+        "desc term item wraps with hanging indent",
+        "- Foo: this is a long desc term item that should wrap onto a second line\n",
+        40,
+        &[
+            "  - Foo: this is a long desc term item",
+            "    that should wrap onto a second line",
+            "",
+        ],
+    ),
+    (
         "code block is not wrapped",
         "```\nlet long_variable_name = something_very_long_here;\n```\n",
         40,
@@ -108,6 +118,32 @@ fn fixed_patterns() {
 // ---------------------------------------------------------------------------
 // 4. Styles mapped once (theme changes break 1 test, not N)
 // ---------------------------------------------------------------------------
+
+#[test]
+fn desc_term_style_applied_to_spans() {
+    let cfg = ThemeConfig {
+        code_color: ratatui::style::Color::Green,
+        ..ThemeConfig::default()
+    };
+    let th = theme_from_cfg(&cfg);
+    let lines = render_markdown(&th, "- Foo: bar baz\n", 80);
+    let line = &lines[0];
+    let foo = line
+        .spans
+        .iter()
+        .find(|s| s.content.as_ref() == "Foo")
+        .expect("term span");
+    assert_eq!(foo.style.fg, Some(ratatui::style::Color::Green));
+    assert!(
+        foo.style
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD),
+        "desc term must be bold"
+    );
+    // separator/content remain unstyled (default fg)
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, "  - Foo: bar baz");
+}
 
 #[test]
 fn theme_styles_applied_to_spans() {
