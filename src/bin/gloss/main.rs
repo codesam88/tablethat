@@ -35,6 +35,10 @@ struct Cli {
     /// Hide the scrollbar in TUI mode.
     #[arg(long)]
     no_scrollbar: bool,
+
+    /// Use ASCII table borders instead of Unicode glyphs.
+    #[arg(long)]
+    ascii: bool,
 }
 
 fn run(cli: Cli) -> Result<(), String> {
@@ -59,17 +63,20 @@ fn run(cli: Cli) -> Result<(), String> {
     let is_tty = is_tty();
     let no_color = cli.no_color;
     let scrollbar = !cli.no_scrollbar;
+    let ascii = cli.ascii;
 
     match cli.path {
         // TUI mode: file or directory argument provided, or no arg but tty
         Some(path) if path.is_file() => {
-            tablethat_lib::gloss::tui::run_file_viewer(&path, &cfg, &themes, 0, width, scrollbar)
-                .map_err(err_chain)?;
+            tablethat_lib::gloss::tui::run_file_viewer(
+                &path, &cfg, &themes, 0, width, scrollbar, ascii,
+            )
+            .map_err(err_chain)?;
             Ok(())
         }
         Some(path) if path.is_dir() => {
             tablethat_lib::gloss::tui::run_directory_browser(
-                &path, &cfg, &themes, width, scrollbar,
+                &path, &cfg, &themes, width, scrollbar, ascii,
             )
             .map_err(err_chain)?;
             Ok(())
@@ -77,14 +84,16 @@ fn run(cli: Cli) -> Result<(), String> {
         Some(path) => Err(format!("{}: not a file or directory", path.display())),
         // Filter mode: stdin piped
         None if !is_tty => {
-            tablethat_lib::gloss::filter::run_filter(&theme, no_color, width)?;
+            tablethat_lib::gloss::filter::run_filter(&theme, no_color, width, ascii)?;
             Ok(())
         }
         // No arg + tty: browse .md files in cwd
         None => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            tablethat_lib::gloss::tui::run_directory_browser(&cwd, &cfg, &themes, width, scrollbar)
-                .map_err(err_chain)?;
+            tablethat_lib::gloss::tui::run_directory_browser(
+                &cwd, &cfg, &themes, width, scrollbar, ascii,
+            )
+            .map_err(err_chain)?;
             Ok(())
         }
     }

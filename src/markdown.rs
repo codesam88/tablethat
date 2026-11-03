@@ -303,7 +303,7 @@ fn render_inline(
     }
 }
 
-fn render_table(node: &comrak::Node<'_>, lines: &mut Vec<Line<'static>>) {
+fn render_table(node: &comrak::Node<'_>, lines: &mut Vec<Line<'static>>, ascii: bool) {
     let mut tbl: Vec<Vec<String>> = Vec::new();
     for row_node in node.children() {
         if let NodeValue::TableRow(_) = row_node.data.borrow().value {
@@ -446,28 +446,76 @@ fn render_table(node: &comrak::Node<'_>, lines: &mut Vec<Line<'static>>) {
         col_w[max_i] += slack;
     }
 
-    let mut sep_count = 0usize;
-    for row in &tbl {
-        if row.is_empty() {
-            continue;
-        }
-        if sep_count > 0 {
-            let ch = if sep_count == 1 { '=' } else { '-' };
-            let mut sep = String::from("|");
-            for &w in &col_w {
-                let dashes: String = std::iter::repeat_n(ch, w + 1).collect();
-                sep.push_str(&format!("{}|", dashes));
+    // Collect non-empty rows (skip empties, as before).
+    let rows: Vec<&Vec<String>> = tbl.iter().filter(|r| !r.is_empty()).collect();
+    if rows.is_empty() {
+        return;
+    }
+
+    let v = if ascii { "|" } else { "│" };
+
+    // Build a horizontal border line from a (left, mid, right, fill) set.
+    let hborder = |left: char, mid: char, right: char, fill: char| -> String {
+        let mut s = String::from(left);
+        for (i, &w) in col_w.iter().enumerate() {
+            if i > 0 {
+                s.push(mid);
             }
-            lines.push(Line::from(sep));
+            s.push_str(&std::iter::repeat_n(fill, w + 1).collect::<String>());
         }
-        let mut buf = String::from("|");
+        s.push(right);
+        s
+    };
+
+    // Top border.
+    if ascii {
+        lines.push(Line::from(hborder('+', '+', '+', '-')));
+    } else {
+        lines.push(Line::from(hborder('┌', '┬', '┐', '─')));
+    }
+
+    // Helper to emit a data row (unchanged row shape).
+    let emit_row = |row: &Vec<String>, lines: &mut Vec<Line<'static>>| {
+        let mut buf = String::from(v);
         for (i, &w) in col_w.iter().enumerate() {
             let raw = row.get(i).map(|s| s.as_str()).unwrap_or("");
             let cell: String = raw.chars().take(w).collect();
-            buf.push_str(&format!(" {:<w$}|", cell, w = w));
+            buf.push_str(&format!(" {:<w$}{}", cell, v, w = w));
         }
         lines.push(Line::from(buf));
-        sep_count += 1;
+    };
+
+    if rows.len() == 1 {
+        // Single (header-only) row: top, row, bottom. No separator needed.
+        emit_row(rows[0], lines);
+        if ascii {
+            lines.push(Line::from(hborder('+', '+', '+', '-')));
+        } else {
+            lines.push(Line::from(hborder('└', '┴', '┘', '─')));
+        }
+        return;
+    }
+
+    // >=2 rows: top, row0 (header), header-sep, row1, [body-sep, rowN...], bottom.
+    emit_row(rows[0], lines);
+    if ascii {
+        lines.push(Line::from(hborder('+', '+', '+', '=')));
+    } else {
+        lines.push(Line::from(hborder('┝', '┿', '┥', '━')));
+    }
+    emit_row(rows[1], lines);
+    for r in &rows[2..] {
+        if ascii {
+            lines.push(Line::from(hborder('+', '+', '+', '-')));
+        } else {
+            lines.push(Line::from(hborder('├', '┼', '┤', '─')));
+        }
+        emit_row(r, lines);
+    }
+    if ascii {
+        lines.push(Line::from(hborder('+', '+', '+', '-')));
+    } else {
+        lines.push(Line::from(hborder('└', '┴', '┘', '─')));
     }
 }
 
@@ -476,12 +524,13 @@ fn render_node(
     th: &MarkdownTheme,
     lines: &mut Vec<Line<'static>>,
     wrap: usize,
+    ascii: bool,
 ) {
     let data = node.data.borrow();
     match &data.value {
         NodeValue::Document | NodeValue::FrontMatter(_) => {
             for child in node.children() {
-                render_node(&child, th, lines, wrap);
+                render_node(&child, th, lines, wrap, ascii);
             }
         }
         NodeValue::Heading(heading) => {
@@ -508,12 +557,12 @@ fn render_node(
         }
         NodeValue::BlockQuote => {
             for child in node.children() {
-                render_node(&child, th, lines, wrap);
+                render_node(&child, th, lines, wrap, ascii);
             }
         }
         NodeValue::List(_list) => {
             for child in node.children() {
-                render_node(&child, th, lines, wrap);
+                render_node(&child, th, lines, wrap, ascii);
             }
             lines.push(Line::from(""));
         }
@@ -571,7 +620,7 @@ fn render_node(
             lines.push(Line::from(""));
         }
         NodeValue::Table(_) => {
-            render_table(node, lines);
+            render_table(node, lines, ascii);
             lines.push(Line::from(""));
         }
         NodeValue::ThematicBreak => {
@@ -585,7 +634,7 @@ fn render_node(
         }
         _ => {
             for child in node.children() {
-                render_node(&child, th, lines, wrap);
+                render_node(&child, th, lines, wrap, ascii);
             }
         }
     }
@@ -599,20 +648,25 @@ fn render_node(
 /// ```
 /// # use tablethat_lib::{ThemeConfig, markdown::{render_markdown, theme_from_cfg}};
 /// let th = theme_from_cfg(&ThemeConfig::default());
-/// let lines = render_markdown(&th, "# Hello\n", 80);
+/// let lines = render_markdown(&th, "# Hello\n", 80, false);
 /// let text: String = lines.iter()
 ///     .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
 ///     .collect();
 /// assert!(text.contains("# Hello"));
 /// ```
-pub fn render_markdown(th: &MarkdownTheme, text: &str, wrap: usize) -> Vec<Line<'static>> {
+pub fn render_markdown(
+    th: &MarkdownTheme,
+    text: &str,
+    wrap: usize,
+    ascii: bool,
+) -> Vec<Line<'static>> {
     let body = strip_frontmatter(text);
     let arena = Arena::new();
     let opts = comrak_options();
     let root = parse_document(&arena, body, &opts);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    render_node(&root, th, &mut lines, wrap);
+    render_node(&root, th, &mut lines, wrap, ascii);
     lines
 }
 #[cfg(test)]
@@ -656,14 +710,33 @@ mod tests {
     fn table_renders_header_and_body() {
         let md = "| **Name** | `Code` |\n|---|---|\n| foo | bar |\n";
         let th = theme_from_cfg(&crate::ThemeConfig::default());
-        let lines = render_markdown(&th, md, 80);
+        let lines = render_markdown(&th, md, 80, false);
         let total: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
             .collect();
         assert!(total.contains("Name"), "Missing header 'Name'");
         assert!(total.contains("foo"), "Missing body 'foo'");
+        for ch in ['┌', '┬', '┐', '┝', '┿', '┥', '━', '└', '┴', '┘', '│'] {
+            assert!(total.contains(ch), "Missing border char {:?}", ch);
+        }
+        assert!(!total.contains('═'), "Double separator must be absent");
+    }
+
+    #[test]
+    fn table_renders_header_and_body_ascii() {
+        let md = "| **Name** | `Code` |\n|---|---|\n| foo | bar |\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 80, true);
+        let total: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(total.contains("Name"), "Missing header 'Name'");
+        assert!(total.contains("foo"), "Missing body 'foo'");
+        assert!(total.contains("+"), "Missing ascii corner/junction");
         assert!(total.contains("="), "Missing separator");
+        assert!(total.contains("|"), "Missing vertical");
     }
 
     // -------------------------------------------------------------------------
@@ -808,7 +881,7 @@ mod tests {
         let md = "x (`input`)";
 
         // Test at width 8 - should fit on one line
-        let lines = render_markdown(&th, md, 8);
+        let lines = render_markdown(&th, md, 8, false);
         let text_lines: Vec<String> = lines
             .iter()
             .filter(|l| !l.spans.is_empty())
@@ -823,7 +896,7 @@ mod tests {
         );
 
         // Test at width 7 - should break but keep (input) together
-        let lines = render_markdown(&th, md, 7);
+        let lines = render_markdown(&th, md, 7, false);
         let text_lines: Vec<String> = lines
             .iter()
             .filter(|l| !l.spans.is_empty())
@@ -846,7 +919,7 @@ mod tests {
     fn list_item_wraps_with_indent() {
         let md = "- This is a long list item that should wrap at the margin and continue with proper indentation\n";
         let th = theme_from_cfg(&crate::ThemeConfig::default());
-        let lines = render_markdown(&th, md, 40);
+        let lines = render_markdown(&th, md, 40, false);
         let text_lines: Vec<String> = lines
             .iter()
             .filter(|l| !l.spans.is_empty())
@@ -872,7 +945,7 @@ mod tests {
     fn code_block_no_wrapping() {
         let md = "```\nfn main() {\n    let x = 1;\n    let long_variable_name = something_very_long_that_would_never_fit_on_one_line_if_wrapped;\n}\n```\n";
         let th = theme_from_cfg(&crate::ThemeConfig::default());
-        let lines = render_markdown(&th, md, 40);
+        let lines = render_markdown(&th, md, 40, false);
         // Find the code lines (they have code_block style)
         let code_lines: Vec<String> = lines
             .iter()
@@ -899,7 +972,34 @@ mod tests {
     fn table_columns_computed_properly() {
         let md = "| Short | A much longer header |\n|---|---|\n| a | b |\n";
         let th = theme_from_cfg(&crate::ThemeConfig::default());
-        let lines = render_markdown(&th, md, 80);
+        let lines = render_markdown(&th, md, 80, false);
+        let table_lines: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        eprintln!("table_lines: {:?}", table_lines);
+        let table_text = table_lines.join("\n");
+        // Table should have separators
+        assert!(table_text.contains("━"), "Table should have separator");
+        // Columns should contain the header text
+        assert!(table_text.contains("Short"));
+        // Note: table column calculation may truncate long headers
+        assert!(
+            table_text.contains("A much") || table_text.contains("longer"),
+            "Table should contain header text"
+        );
+    }
+
+    #[test]
+    fn table_columns_computed_properly_ascii() {
+        let md = "| Short | A much longer header |\n|---|---|\n| a | b |\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 80, true);
         let table_lines: Vec<String> = lines
             .iter()
             .map(|l| {
@@ -931,7 +1031,7 @@ mod tests {
         let md =
             "# This is a very long heading that goes on and on and on and should not be wrapped\n";
         let th = theme_from_cfg(&crate::ThemeConfig::default());
-        let lines = render_markdown(&th, md, 40);
+        let lines = render_markdown(&th, md, 40, false);
         // Heading should be on one line with prefix
         let heading_line = lines
             .iter()

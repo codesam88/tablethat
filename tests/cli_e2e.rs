@@ -306,3 +306,22 @@ fn gloss_rejects_nonexistent_path() {
     let out = r.run(r.cmd("gloss").arg(r.path().join("nope.md")));
     assert!(!out.status.success());
 }
+
+#[test]
+fn gloss_filter_table_borders_respect_ascii_flag() {
+    let r = Root::new();
+    let input = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n";
+    let unicode = gloss_stdin(&r, &["--width", "80"], input);
+    assert!(unicode.status.success());
+    let utext = String::from_utf8(unicode.stdout).expect("utf8");
+    assert!(utext.contains('│'), "unicode default must use box vertical");
+
+    let ascii = gloss_stdin(&r, &["--width", "80", "--ascii"], input);
+    assert!(ascii.status.success());
+    let atext = String::from_utf8(ascii.stdout).expect("utf8");
+    assert!(atext.contains('|'), "ascii mode must use pipe vertical");
+    assert!(
+        atext.contains('='),
+        "ascii mode must use equals header fill"
+    );
+}
