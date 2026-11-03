@@ -480,7 +480,7 @@ impl App<'_> {
             && let Ok(content) = std::fs::read_to_string(path)
         {
             self.preview_width = tw;
-            self.preview = render_markdown(&theme, &content, tw);
+            self.preview = render_markdown(&theme, &content, tw, false);
             self.preview_scroll = 0;
             self.preview_offset = 0;
         }
@@ -1238,7 +1238,7 @@ impl App<'_> {
     fn render_content(&mut self, content: &str) {
         let theme_cfg = self.current_theme_config();
         let theme = theme_from_cfg(&theme_cfg);
-        self.preview = render_markdown(&theme, content, self.preview_width);
+        self.preview = render_markdown(&theme, content, self.preview_width, false);
     }
 
     fn current_task_path(&self) -> Option<(&str, &Path)> {

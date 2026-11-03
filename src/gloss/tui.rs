@@ -167,6 +167,8 @@ struct App {
     width_setting: usize,
     /// Whether to reserve a 1-char scrollbar + 1-char gap at the right.
     scrollbar: bool,
+    /// Use ASCII table borders instead of Unicode glyphs.
+    ascii: bool,
     themes: Vec<lib::theme::ThemeFile>,
     current_theme: usize,
     quit: bool,
@@ -185,6 +187,7 @@ impl App {
         themes: Vec<lib::theme::ThemeFile>,
         width: usize,
         scrollbar: bool,
+        ascii: bool,
     ) -> Self {
         let term_cols = terminal::size()
             .map(|(cols, _)| cols as usize)
@@ -199,6 +202,7 @@ impl App {
             width: Self::effective_width(width, term_cols, scrollbar),
             width_setting: width,
             scrollbar,
+            ascii,
             themes,
             current_theme: 0,
             quit: false,
@@ -246,7 +250,7 @@ impl App {
                     DEFAULT.get_or_init(lib::ThemeConfig::default)
                 });
             let th = lib::markdown::theme_from_cfg(theme_cfg);
-            self.content = lib::markdown::render_markdown(&th, &text, self.width);
+            self.content = lib::markdown::render_markdown(&th, &text, self.width, self.ascii);
             self.scroll = 0;
             self.offset = 0;
         }
@@ -270,7 +274,7 @@ impl App {
         if let Some(path) = self.files.get(self.selected)
             && let Ok(text) = std::fs::read_to_string(path)
         {
-            let base = lib::markdown::render_markdown(&th, &text, self.width);
+            let base = lib::markdown::render_markdown(&th, &text, self.width, self.ascii);
             let q = self.search_query.to_lowercase();
             let (content, hits) = highlight_search(
                 &base,
@@ -378,9 +382,10 @@ pub fn run_file_viewer(
     initial_theme: usize,
     width: usize,
     scrollbar: bool,
+    ascii: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let files = vec![path.to_path_buf()];
-    let mut app = App::new(files, themes.to_vec(), width, scrollbar);
+    let mut app = App::new(files, themes.to_vec(), width, scrollbar, ascii);
     app.current_theme = initial_theme;
     app.load_selected();
     run_tui(&mut app, cfg)
@@ -393,6 +398,7 @@ pub fn run_directory_browser(
     themes: &[lib::theme::ThemeFile],
     width: usize,
     scrollbar: bool,
+    ascii: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let files = match lib::plan::store::sorted_md_entries(dir) {
         Ok(files) => files,
@@ -407,7 +413,7 @@ pub fn run_directory_browser(
         );
     }
 
-    let mut app = App::new(files, themes.to_vec(), width, scrollbar);
+    let mut app = App::new(files, themes.to_vec(), width, scrollbar, ascii);
     run_tui(&mut app, cfg)
 }
 
@@ -730,7 +736,7 @@ mod paging_tests {
     use super::*;
 
     fn app_with_scroll(scroll: usize, viewport_height: usize) -> App {
-        let mut app = App::new(Vec::new(), Vec::new(), 80, true);
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
         app.scroll = scroll;
         app.viewport_height = viewport_height;
         app
@@ -821,7 +827,7 @@ mod scrollbar_search_tests {
     }
 
     fn app_with_search(content_len: usize, hits: Vec<usize>, current: usize) -> App {
-        let mut app = App::new(Vec::new(), Vec::new(), 80, true);
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
         app.content = plain_lines(content_len);
         app.search_hits = hits;
         app.search_index = current;
@@ -943,7 +949,7 @@ mod search_persist_tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("doc.md");
         std::fs::write(&path, "has needle here\nplain line\n").unwrap();
-        let mut app = App::new(vec![path], Vec::new(), 80, true);
+        let mut app = App::new(vec![path], Vec::new(), 80, true, false);
         app.search_query = "needle".to_string();
         app.run_search();
         assert!(!app.search_hits.is_empty());
@@ -1011,7 +1017,7 @@ mod user_sequence_tests {
     #[test]
     fn user_sequence_search_n_scroll() {
         let (_tmp, path) = styled_doc();
-        let mut app = App::new(vec![path], Vec::new(), 80, true);
+        let mut app = App::new(vec![path], Vec::new(), 80, true, false);
         // type query + Enter
         app.search_mode = true;
         for ch in "needle".chars() {
@@ -1060,7 +1066,7 @@ mod long_file_bar_tests {
             }
         }
         std::fs::write(&path, &text).unwrap();
-        let app = App::new(vec![path], Vec::new(), 80, true);
+        let app = App::new(vec![path], Vec::new(), 80, true, false);
         (tmp, app)
     }
 
@@ -1111,7 +1117,7 @@ mod marker_layer_tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("doc.md");
         std::fs::write(&path, "needle one\n\nmiddle filler\n\nneedle two\n").unwrap();
-        let mut app = App::new(vec![path], Vec::new(), 80, true);
+        let mut app = App::new(vec![path], Vec::new(), 80, true, false);
         app.search_query = "needle".to_string();
         app.run_search();
         assert_eq!(app.search_hits.len(), 2);
@@ -1171,7 +1177,7 @@ mod search_cancel_tests {
 
     #[test]
     fn ctrl_c_cancels_search_like_esc() {
-        let mut app = App::new(Vec::new(), Vec::new(), 80, true);
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
         app.search_mode = true;
         app.search_query = "x".to_string();
         app.search_hits = vec![3];

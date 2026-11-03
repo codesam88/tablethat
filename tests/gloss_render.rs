@@ -33,7 +33,7 @@ fn text_of(lines: &[Line<'static>]) -> Vec<String> {
 
 fn render_default(text: &str, width: usize) -> Vec<String> {
     let th = theme_from_cfg(&ThemeConfig::default());
-    text_of(&render_markdown(&th, text, width))
+    text_of(&render_markdown(&th, text, width, false))
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ fn theme_styles_applied_to_spans() {
         ..ThemeConfig::default()
     };
     let th = theme_from_cfg(&cfg);
-    let lines = render_markdown(&th, "# Title\n\nsome `code` here\n", 80);
+    let lines = render_markdown(&th, "# Title\n\nsome `code` here\n", 80, false);
     let head: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(head, "# Title");
     assert!(
@@ -186,7 +186,7 @@ fn corpus_never_panics_at_any_width() {
     for path in corpus_inputs() {
         let input = std::fs::read_to_string(&path).expect("read corpus file");
         for width in [20, 40, 80, 120] {
-            let _ = render_markdown(&th, &input, width);
+            let _ = render_markdown(&th, &input, width, false);
         }
     }
 }
@@ -253,4 +253,41 @@ fn formatter_is_idempotent() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Unicode / ASCII table borders
+// ---------------------------------------------------------------------------
+
+#[test]
+fn table_borders_unicode_default() {
+    let md = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n";
+    let th = theme_from_cfg(&ThemeConfig::default());
+    let text = text_of(&render_markdown(&th, md, 80, false)).join("\n");
+    for ch in ['┌', '┬', '┐', '┝', '┿', '┥', '└', '┴', '┘', '━', '─', '│'] {
+        assert!(
+            text.contains(ch),
+            "unicode border char {:?} must render",
+            ch
+        );
+    }
+    assert!(
+        !text.contains('═'),
+        "double separator must not render in unicode mode"
+    );
+    assert!(
+        !text.contains('|'),
+        "ascii pipe must not render in unicode mode"
+    );
+}
+
+#[test]
+fn table_borders_ascii_mode() {
+    let md = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n";
+    let th = theme_from_cfg(&ThemeConfig::default());
+    let text = text_of(&render_markdown(&th, md, 80, true)).join("\n");
+    assert!(text.contains('+'), "ascii corner/junction must render");
+    assert!(text.contains('|'), "ascii vertical must render");
+    assert!(text.contains('='), "ascii header fill must render");
+    assert!(text.contains('-'), "ascii body fill must render");
 }
