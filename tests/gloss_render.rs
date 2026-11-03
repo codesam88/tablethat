@@ -126,7 +126,7 @@ fn desc_term_style_applied_to_spans() {
         ..ThemeConfig::default()
     };
     let th = theme_from_cfg(&cfg);
-    let lines = render_markdown(&th, "- Foo: bar baz\n", 80);
+    let lines = render_markdown(&th, "- Foo: bar baz\n", 80, false);
     let line = &lines[0];
     let foo = line
         .spans
