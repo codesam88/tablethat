@@ -74,7 +74,12 @@ fn format_markdown_body(body: &str, width: usize, reflow: bool) -> String {
 
 /// Format one file in place. Returns whether the file changed;
 /// failures are `Err` strings for the caller to present.
-pub fn format_file(path: &std::path::Path, width: usize, reflow: bool) -> Result<bool, String> {
+pub fn format_file(
+    path: &std::path::Path,
+    width: usize,
+    reflow: bool,
+    check: bool,
+) -> Result<bool, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("{}: cannot read — {e}", path.display()))?;
 
@@ -91,6 +96,9 @@ pub fn format_file(path: &std::path::Path, width: usize, reflow: bool) -> Result
     };
 
     if formatted != content {
+        if check {
+            return Ok(true);
+        }
         std::fs::write(path, &formatted)
             .map_err(|e| format!("{}: cannot write — {e}", path.display()))?;
         return Ok(true);
@@ -104,6 +112,7 @@ pub fn normalize_all(
     root: &std::path::Path,
     width: usize,
     reflow: bool,
+    check: bool,
 ) -> Result<usize, Vec<String>> {
     let tasks_dir = root.join(crate::PLAN_DIR);
 
@@ -133,9 +142,13 @@ pub fn normalize_all(
         };
 
         if normalized != content {
-            match std::fs::write(path, &normalized) {
-                Ok(()) => fixed += 1,
-                Err(e) => errors.push(format!("{}: cannot write — {e}", path.display())),
+            if check {
+                fixed += 1;
+            } else {
+                match std::fs::write(path, &normalized) {
+                    Ok(()) => fixed += 1,
+                    Err(e) => errors.push(format!("{}: cannot write — {e}", path.display())),
+                }
             }
         }
     }
@@ -229,16 +242,35 @@ mod tests {
             "---\nstatus: open\ntype: bug\npriority: high\n---\n\nbody\n",
         )
         .unwrap();
-        assert_eq!(format_file(&path, 80, false).expect("formats"), false);
+        assert_eq!(
+            format_file(&path, 80, false, false).expect("formats"),
+            false
+        );
         // Scrambled order is fixed: Ok(true).
         std::fs::write(
             &path,
             "---\npriority: high\nstatus: open\ntype: bug\n---\n\nbody\n",
         )
         .unwrap();
-        assert_eq!(format_file(&path, 80, false).expect("formats"), true);
+        assert_eq!(format_file(&path, 80, false, false).expect("formats"), true);
         // Missing file is an error, not silent false.
-        assert!(format_file(&dir.join("missing.md"), 80, false).is_err());
+        assert!(format_file(&dir.join("missing.md"), 80, false, false).is_err());
+    }
+
+    #[test]
+    fn format_file_check_does_not_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let path = dir.join("a.md");
+        std::fs::write(
+            &path,
+            "---\npriority: high\nstatus: open\ntype: bug\n---\n\nbody\n",
+        )
+        .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(format_file(&path, 80, false, true).expect("checks"), true);
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(before, after, "check must not write");
     }
 
     #[test]
@@ -251,7 +283,13 @@ mod tests {
             "---\npriority: high\nstatus: open\ntype: bug\n---\n\nbody\n",
         )
         .unwrap();
-        assert_eq!(normalize_all(root, 80, false).expect("normalizes"), 1);
-        assert_eq!(normalize_all(root, 80, false).expect("idempotent"), 0);
+        assert_eq!(
+            normalize_all(root, 80, false, false).expect("normalizes"),
+            1
+        );
+        assert_eq!(
+            normalize_all(root, 80, false, false).expect("idempotent"),
+            0
+        );
     }
 }

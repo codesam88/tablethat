@@ -48,7 +48,7 @@ pub struct ColorsConfig {
 /// Format configuration for `plan format`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FormatConfig {
-    /// Wrap width for `plan format` (default: 80).
+    /// Wrap width for `plan format` (default: 72).
     pub width: usize,
     /// Whether `plan format` joins short lines into flow before re-splitting (default: true).
     pub reflow: bool,
@@ -57,7 +57,7 @@ pub struct FormatConfig {
 impl Default for FormatConfig {
     fn default() -> Self {
         Self {
-            width: 80,
+            width: 72,
             reflow: true,
         }
     }

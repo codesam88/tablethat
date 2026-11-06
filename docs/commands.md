@@ -30,6 +30,9 @@ Filters (kanban/browse/list): `-s/--status`, `-t/--type`, `-p/--priority`,
 
 `format [PATH]`: with a file, format that file; with a directory, format all
 `.md` files in it; with no path, normalize every task in the workspace.
+`--width`/`-w COLS` overrides `format.width` (default 72) for this run.
+`--reflow`/`--no-reflow` overrides `format.reflow` (default true) for this run.
+`--check` dry-runs: report files that would change without writing, non-zero exit when dirty.
 
 ## `gloss`
 

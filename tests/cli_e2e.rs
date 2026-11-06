@@ -234,6 +234,237 @@ fn add_rejects_newline_field_values() {
 }
 
 #[test]
+fn format_width_cli_override() {
+    let r = Root::new();
+    assert!(r.run(r.plan().arg("init")).status.success());
+    assert!(r.run(r.plan().args(["add", "wide"])).status.success());
+
+    let long = "the quick brown fox jumps over the lazy dog and keeps on going forever and ever";
+
+    // First pass: narrow width wraps the long prose line.
+    let scrambled = format!(
+        "---\nstatus: open\ntype: bug\npriority: high\narea: backend\n---\n\n{}\n",
+        long
+    );
+    std::fs::write(r.task_path("wide"), scrambled).expect("write");
+    let out = r.run(
+        r.plan()
+            .args(["format", "--width", "20"])
+            .arg(r.task_path("wide")),
+    );
+    assert!(out.status.success(), "format --width 20 must succeed");
+
+    let text = std::fs::read_to_string(r.task_path("wide")).expect("read");
+    // Extract lines after the second '---'
+    let mut after = Vec::new();
+    let mut dashes = 0;
+    for line in text.lines() {
+        if line.trim() == "---" {
+            dashes += 1;
+            if dashes == 2 {
+                // subsequent lines are body
+            }
+            continue;
+        }
+        if dashes >= 2 {
+            after.push(line);
+        }
+    }
+    let nonempty: Vec<&str> = after
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .copied()
+        .collect();
+    assert!(
+        nonempty.len() > 1,
+        "narrow width should wrap into multiple lines"
+    );
+    for line in &nonempty {
+        assert!(
+            line.trim_end().len() <= 20,
+            "wrapped line exceeds 20 cols: {line:?}"
+        );
+    }
+
+    // Second pass: wide width keeps it on (at least) one long line.
+    let scrambled2 = format!(
+        "---\nstatus: open\ntype: bug\npriority: high\narea: backend\n---\n\n{}\n",
+        long
+    );
+    std::fs::write(r.task_path("wide"), scrambled2).expect("write");
+    let out = r.run(
+        r.plan()
+            .args(["format", "--width", "80"])
+            .arg(r.task_path("wide")),
+    );
+    assert!(out.status.success(), "format --width 80 must succeed");
+
+    let text2 = std::fs::read_to_string(r.task_path("wide")).expect("read");
+    let mut after2 = Vec::new();
+    let mut dashes2 = 0;
+    for line in text2.lines() {
+        if line.trim() == "---" {
+            dashes2 += 1;
+            continue;
+        }
+        if dashes2 >= 2 {
+            after2.push(line);
+        }
+    }
+    let nonempty2: Vec<&str> = after2
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .copied()
+        .collect();
+    assert!(
+        nonempty2.iter().any(|l| l.trim_end().len() > 20),
+        "wide width should keep a long line: {nonempty2:?}"
+    );
+}
+
+#[test]
+fn format_width_config_fallback_then_cli_wins() {
+    let r = Root::new();
+    assert!(r.run(r.plan().arg("init")).status.success());
+    assert!(r.run(r.plan().args(["add", "layered"])).status.success());
+
+    // Long single-line body synthesized by the test; comfortably wider
+    // than either width used below so the outcome distinguishes them.
+    let line = "word ".repeat(30).trim_end().to_string();
+    let scrambled = format!(
+        "---\nstatus: open\ntype: bug\npriority: high\narea: backend\n---\n\n{}\n",
+        line
+    );
+    let body_lines = |slug: &str| -> Vec<String> {
+        let text = std::fs::read_to_string(r.task_path(slug)).expect("read");
+        let mut dashes = 0;
+        text.lines()
+            .filter(|l| {
+                if l.trim() == "---" {
+                    dashes += 1;
+                    return false;
+                }
+                dashes >= 2 && !l.trim().is_empty()
+            })
+            .map(|l| l.trim_end().to_string())
+            .collect()
+    };
+
+    // No --width: the env-provided width governs (config layer fallback).
+    std::fs::write(r.task_path("layered"), &scrambled).expect("write");
+    let out = r.run(
+        r.plan()
+            .args(["format"])
+            .arg(r.task_path("layered"))
+            .env("PLAN_FORMAT__WIDTH", "25"),
+    );
+    assert!(out.status.success(), "format must succeed");
+    let wrapped = body_lines("layered");
+    assert!(wrapped.len() > 1, "narrow config width should wrap");
+    assert!(
+        wrapped.iter().all(|l| l.len() <= 25),
+        "no --width must honor config width: {wrapped:?}"
+    );
+
+    // Same env, explicit --width: CLI wins over config.
+    std::fs::write(r.task_path("layered"), &scrambled).expect("write");
+    let out = r.run(
+        r.plan()
+            .args(["format", "--width", "100"])
+            .arg(r.task_path("layered"))
+            .env("PLAN_FORMAT__WIDTH", "25"),
+    );
+    assert!(out.status.success(), "format must succeed");
+    let wide = body_lines("layered");
+    assert!(
+        wide.iter().any(|l| l.len() > 25),
+        "explicit --width must override config width: {wide:?}"
+    );
+
+    // Fixpoint: formatting formatted output changes nothing.
+    let once = std::fs::read_to_string(r.task_path("layered")).expect("read");
+    let out = r.run(
+        r.plan()
+            .args(["format", "--width", "100"])
+            .arg(r.task_path("layered"))
+            .env("PLAN_FORMAT__WIDTH", "25"),
+    );
+    assert!(out.status.success(), "format must succeed");
+    let twice = std::fs::read_to_string(r.task_path("layered")).expect("read");
+    assert_eq!(once, twice, "format must be idempotent");
+}
+
+#[test]
+fn format_reflow_cli_override() {
+    let r = Root::new();
+    assert!(r.run(r.plan().arg("init")).status.success());
+    assert!(r.run(r.plan().args(["add", "reflowy"])).status.success());
+
+    let long = "word ".repeat(40).trim_end().to_string();
+    let body = format!("first short line\nsecond short line\n{}\n", long);
+
+    // --reflow joins short lines.
+    let scrambled = format!(
+        "---\nstatus: open\ntype: bug\npriority: high\narea: backend\n---\n\n{}",
+        body
+    );
+    std::fs::write(r.task_path("reflowy"), scrambled).expect("write");
+    let out = r.run(
+        r.plan()
+            .args(["format", "--reflow"])
+            .arg(r.task_path("reflowy")),
+    );
+    assert!(out.status.success(), "format --reflow must succeed");
+    let text = std::fs::read_to_string(r.task_path("reflowy")).expect("read");
+    assert!(
+        text.contains("first short line second short line"),
+        "--reflow must join short lines: {text:?}"
+    );
+
+    // --no-reflow does NOT join.
+    let scrambled2 = format!(
+        "---\nstatus: open\ntype: bug\npriority: high\narea: backend\n---\n\n{}",
+        body
+    );
+    std::fs::write(r.task_path("reflowy"), scrambled2).expect("write");
+    let out = r.run(
+        r.plan()
+            .args(["format", "--no-reflow"])
+            .arg(r.task_path("reflowy")),
+    );
+    assert!(out.status.success(), "format --no-reflow must succeed");
+    let text2 = std::fs::read_to_string(r.task_path("reflowy")).expect("read");
+    assert!(
+        !text2.contains("first short line second short line"),
+        "--no-reflow must not join short lines: {text2:?}"
+    );
+}
+
+#[test]
+fn format_check_does_not_write() {
+    let r = Root::new();
+    assert!(r.run(r.plan().arg("init")).status.success());
+    assert!(r.run(r.plan().args(["add", "chk"])).status.success());
+
+    let scrambled = "---\npriority: high\nstatus: open\ntype: bug\n---\n\nbody\n".to_string();
+    std::fs::write(r.task_path("chk"), scrambled.clone()).expect("write");
+    let before = std::fs::read(r.task_path("chk")).expect("read");
+
+    let out = r.run(r.plan().args(["format", "--check"]).arg(r.task_path("chk")));
+    assert!(!out.status.success(), "check on dirty must fail");
+    let after = std::fs::read(r.task_path("chk")).expect("read");
+    assert_eq!(before, after, "check must not write");
+
+    // format fixes
+    let out = r.run(r.plan().arg("format").arg(r.task_path("chk")));
+    assert!(out.status.success(), "format must succeed");
+
+    // check again clean
+    let out = r.run(r.plan().args(["format", "--check"]).arg(r.task_path("chk")));
+    assert!(out.status.success(), "check on clean must succeed");
+}
+
+#[test]
 fn format_nonexistent_path_is_error() {
     let r = Root::new();
     let out = r.run(r.plan().arg("format").arg(r.path().join("nope")));

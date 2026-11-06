@@ -160,6 +160,18 @@ enum Commands {
     Format {
         /// File or directory to format (default: .plan/*.md)
         path: Option<PathBuf>,
+        /// Wrap width for markdown body (overrides format.width)
+        #[arg(short, long, value_name = "COLS")]
+        width: Option<usize>,
+        /// Join short lines into flow before re-splitting (overrides format.reflow)
+        #[arg(long, overrides_with = "no_reflow")]
+        reflow: bool,
+        /// Don't join short lines (overrides format.reflow)
+        #[arg(long, overrides_with = "reflow")]
+        no_reflow: bool,
+        /// Report files that would change without writing
+        #[arg(long)]
+        check: bool,
     },
 }
 
@@ -290,59 +302,124 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             Ok(())
         }
-        Some(Commands::Format { path }) => match path {
-            Some(p) => {
-                if p.is_dir() {
-                    let entries = tablethat_lib::plan::store::sorted_md_entries(&p)?;
-                    let mut errors: Vec<String> = Vec::new();
-                    for entry in &entries {
+        Some(Commands::Format {
+            path,
+            width,
+            reflow,
+            no_reflow,
+            check,
+        }) => {
+            let effective_width = width.unwrap_or(cfg.format.width);
+            let effective_reflow = if reflow {
+                true
+            } else if no_reflow {
+                false
+            } else {
+                cfg.format.reflow
+            };
+            match path {
+                Some(p) => {
+                    if p.is_dir() {
+                        let entries = tablethat_lib::plan::store::sorted_md_entries(&p)?;
+                        let mut errors: Vec<String> = Vec::new();
+                        let mut would_change = 0usize;
+                        for entry in &entries {
+                            match tablethat_lib::plan::format::format_file(
+                                entry,
+                                effective_width,
+                                effective_reflow,
+                                check,
+                            ) {
+                                Ok(true) => {
+                                    if check {
+                                        eprintln!("would format {}", entry.display());
+                                        would_change += 1;
+                                    } else {
+                                        eprintln!("formatted {}", entry.display());
+                                    }
+                                }
+                                Ok(false) => {}
+                                Err(e) => errors.push(e),
+                            }
+                        }
+                        if !errors.is_empty() {
+                            return Err(errors.join("\n"));
+                        }
+                        if check && would_change > 0 {
+                            return Err(format!("{} file(s) would be reformatted", would_change));
+                        }
+                        Ok(())
+                    } else if p.is_file() {
                         match tablethat_lib::plan::format::format_file(
-                            entry,
-                            cfg.format.width,
-                            cfg.format.reflow,
+                            &p,
+                            effective_width,
+                            effective_reflow,
+                            check,
                         ) {
-                            Ok(true) => eprintln!("formatted {}", entry.display()),
-                            Ok(false) => {}
-                            Err(e) => errors.push(e),
+                            Ok(true) => {
+                                if check {
+                                    return Err(format!("{}: would be reformatted", p.display()));
+                                }
+                                eprintln!("formatted {}", p.display());
+                                Ok(())
+                            }
+                            Ok(false) => Ok(()),
+                            Err(e) => Err(e),
+                        }
+                    } else {
+                        Err(format!("{}: not a file or directory", p.display()))
+                    }
+                }
+                None => {
+                    if check {
+                        let tasks_dir = root.join(tablethat_lib::PLAN_DIR);
+                        let entries = tablethat_lib::plan::store::read_task_files(&tasks_dir)?;
+                        let mut errors: Vec<String> = Vec::new();
+                        let mut would_change = 0usize;
+                        for entry in &entries {
+                            match tablethat_lib::plan::format::format_file(
+                                entry,
+                                effective_width,
+                                effective_reflow,
+                                true,
+                            ) {
+                                Ok(true) => {
+                                    eprintln!("would format {}", entry.display());
+                                    would_change += 1;
+                                }
+                                Ok(false) => {}
+                                Err(e) => errors.push(e),
+                            }
+                        }
+                        if !errors.is_empty() {
+                            return Err(errors.join("\n"));
+                        }
+                        if would_change > 0 {
+                            return Err(format!("{} file(s) would be reformatted", would_change));
+                        }
+                        eprintln!("all files already canonical");
+                        Ok(())
+                    } else {
+                        match tablethat_lib::plan::format::normalize_all(
+                            &root,
+                            effective_width,
+                            effective_reflow,
+                            false,
+                        ) {
+                            Ok(0) => {
+                                eprintln!("all files already canonical");
+                                Ok(())
+                            }
+                            Ok(n) => {
+                                eprintln!("fixed {n} file(s)");
+                                Ok(())
+                            }
+                            Err(errors) => Err(errors.join("\n")),
                         }
                     }
-                    if !errors.is_empty() {
-                        return Err(errors.join("\n"));
-                    }
-                    Ok(())
-                } else if p.is_file() {
-                    match tablethat_lib::plan::format::format_file(
-                        &p,
-                        cfg.format.width,
-                        cfg.format.reflow,
-                    ) {
-                        Ok(true) => {
-                            eprintln!("formatted {}", p.display());
-                            Ok(())
-                        }
-                        Ok(false) => Ok(()),
-                        Err(e) => Err(e),
-                    }
-                } else {
-                    Err(format!("{}: not a file or directory", p.display()))
                 }
             }
-            None => match tablethat_lib::plan::format::normalize_all(
-                &root,
-                cfg.format.width,
-                cfg.format.reflow,
-            ) {
-                Ok(0) => {
-                    eprintln!("all files already canonical");
-                    Ok(())
-                }
-                Ok(n) => {
-                    eprintln!("fixed {n} file(s)");
-                    Ok(())
-                }
-                Err(errors) => Err(errors.join("\n")),
-            },
-        },
+        }
         None => {
             // Default view from config
             match cfg.default_view.as_str() {
