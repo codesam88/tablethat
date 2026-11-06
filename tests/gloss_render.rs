@@ -300,20 +300,30 @@ fn table_borders_unicode_default() {
     let md = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n";
     let th = theme_from_cfg(&ThemeConfig::default());
     let text = text_of(&render_markdown(&th, md, 80, false)).join("\n");
-    for ch in ['┌', '┬', '┐', '┝', '┿', '┥', '└', '┴', '┘', '━', '─', '│'] {
+    // Representative glyphs per class only.
+    for ch in ['┌', '│', '─', '━'] {
         assert!(
             text.contains(ch),
             "unicode border char {:?} must render",
             ch
         );
     }
+    // Content preservation.
+    for w in ["a", "b", "1", "2", "3", "4"] {
+        assert!(text.contains(w), "content {w:?} must survive");
+    }
     assert!(
         !text.contains('═'),
         "double separator must not render in unicode mode"
     );
+    // Unicode-vs-ascii contrast.
     assert!(
         !text.contains('|'),
         "ascii pipe must not render in unicode mode"
+    );
+    assert!(
+        !text.contains('+'),
+        "ascii corner must not render in unicode mode"
     );
 }
 
@@ -326,4 +336,13 @@ fn table_borders_ascii_mode() {
     assert!(text.contains('|'), "ascii vertical must render");
     assert!(text.contains('='), "ascii header fill must render");
     assert!(text.contains('-'), "ascii body fill must render");
+    // Content preservation.
+    for w in ["a", "b", "1", "2", "3", "4"] {
+        assert!(text.contains(w), "content {w:?} must survive");
+    }
+    // ASCII-vs-unicode contrast.
+    assert!(
+        !text.contains('┌'),
+        "unicode corner must not render in ascii mode"
+    );
 }

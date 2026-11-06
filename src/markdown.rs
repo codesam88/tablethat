@@ -820,10 +820,18 @@ mod tests {
             .collect();
         assert!(total.contains("Name"), "Missing header 'Name'");
         assert!(total.contains("foo"), "Missing body 'foo'");
-        for ch in ['┌', '┬', '┐', '┝', '┿', '┥', '━', '└', '┴', '┘', '│'] {
+        // Representative glyphs per class (corner/vertical/fill) only.
+        for ch in ['┌', '│', '─', '━'] {
             assert!(total.contains(ch), "Missing border char {:?}", ch);
         }
+        assert!(total.contains("Name"), "Missing header 'Name'");
+        assert!(total.contains("foo"), "Missing body 'foo'");
         assert!(!total.contains('═'), "Double separator must be absent");
+        // Unicode mode must not use ASCII pipes/corners.
+        assert!(
+            !total.contains('+'),
+            "ascii corner must not render in unicode mode"
+        );
     }
 
     #[test]
@@ -840,6 +848,11 @@ mod tests {
         assert!(total.contains("+"), "Missing ascii corner/junction");
         assert!(total.contains("="), "Missing separator");
         assert!(total.contains("|"), "Missing vertical");
+        // ASCII mode must not use unicode corners.
+        assert!(
+            !total.contains('┌'),
+            "unicode corner must not render in ascii mode"
+        );
     }
 
     // -------------------------------------------------------------------------

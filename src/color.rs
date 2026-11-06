@@ -119,22 +119,41 @@ mod tests {
 
     #[test]
     fn status_color_maps_correctly() {
-        let colors = ColorsConfig::default();
-        assert_eq!(status_color("open", &colors), Color::Yellow);
-        assert_eq!(status_color("in-progress", &colors), Color::Magenta);
-        assert_eq!(status_color("blocked", &colors), Color::Red);
-        assert_eq!(status_color("backlog", &colors), Color::Blue);
-        assert_eq!(status_color("idea", &colors), Color::Cyan);
-        assert_eq!(status_color("done", &colors), Color::Green);
+        // Synthesized non-default config: each known key resolves to the
+        // configured value; unknown falls back to White.
+        let colors = ColorsConfig {
+            status: crate::StatusColors {
+                in_progress: Color::Rgb(1, 2, 3),
+                open: Color::Rgb(4, 5, 6),
+                blocked: Color::Rgb(7, 8, 9),
+                backlog: Color::Rgb(10, 11, 12),
+                idea: Color::Rgb(13, 14, 15),
+                done: Color::Rgb(16, 17, 18),
+            },
+            priority: crate::PriorityColors::default(),
+        };
+        assert_eq!(status_color("in-progress", &colors), Color::Rgb(1, 2, 3));
+        assert_eq!(status_color("open", &colors), Color::Rgb(4, 5, 6));
+        assert_eq!(status_color("blocked", &colors), Color::Rgb(7, 8, 9));
+        assert_eq!(status_color("backlog", &colors), Color::Rgb(10, 11, 12));
+        assert_eq!(status_color("idea", &colors), Color::Rgb(13, 14, 15));
+        assert_eq!(status_color("done", &colors), Color::Rgb(16, 17, 18));
         assert_eq!(status_color("unknown", &colors), Color::White);
     }
 
     #[test]
     fn priority_color_maps_correctly() {
-        let colors = ColorsConfig::default();
-        assert_eq!(priority_color("high", &colors), Color::Red);
-        assert_eq!(priority_color("medium", &colors), Color::Yellow);
-        assert_eq!(priority_color("low", &colors), Color::DarkGray);
+        let colors = ColorsConfig {
+            status: crate::StatusColors::default(),
+            priority: crate::PriorityColors {
+                high: Color::Rgb(21, 22, 23),
+                medium: Color::Rgb(24, 25, 26),
+                low: Color::Rgb(27, 28, 29),
+            },
+        };
+        assert_eq!(priority_color("high", &colors), Color::Rgb(21, 22, 23));
+        assert_eq!(priority_color("medium", &colors), Color::Rgb(24, 25, 26));
+        assert_eq!(priority_color("low", &colors), Color::Rgb(27, 28, 29));
         assert_eq!(priority_color("unknown", &colors), Color::White);
     }
 }

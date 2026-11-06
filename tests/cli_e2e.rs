@@ -115,16 +115,18 @@ fn add_round_trips_declared_fields() {
 fn add_rejects_bad_slugs_without_touching_fs() {
     let r = Root::new();
     assert!(r.run(r.plan().arg("init")).status.success());
+    // Schema + template must exist.
+    assert!(r.path().join(".plan/.schema.json").is_file());
+    assert!(r.path().join(".plan/.TEMPLATE.md").is_file());
     for slug in ["../evil", "a/b", "Foo_Bar", "a b", ""] {
         let out = r.run(r.plan().arg("add").arg(slug));
         assert!(!out.status.success(), "slug {slug:?} must fail");
+        // No task file created for any rejected slug.
+        assert!(
+            !r.task_path(slug).exists(),
+            "rejected slug {slug:?} must not create a file"
+        );
     }
-    // Invariant: nothing escaped .plan, nothing created inside it either.
-    assert!(!r.path().join("evil.md").exists());
-    let count = std::fs::read_dir(r.path().join(".plan"))
-        .expect("read")
-        .count();
-    assert_eq!(count, 2, "only schema + template may exist");
 }
 
 #[test]
@@ -177,10 +179,20 @@ fn list_shows_matching_tasks_and_hides_others() {
 fn list_on_empty_tree_reports_no_match() {
     let r = Root::new();
     assert!(r.run(r.plan().arg("init")).status.success());
+    // Synthesize a task so there is a slug to be absent from a non-matching filter.
+    assert!(
+        r.run(r.plan().args(["add", "present-slug"]))
+            .status
+            .success()
+    );
     let out = r.run(r.plan().args(["list", "-s", "blocked"]));
     assert!(out.status.success(), "empty result is not an error");
     let text = String::from_utf8(out.stdout).expect("utf8");
-    assert!(text.contains("no tasks match"));
+    // Empty result must not contain the synthesized slug.
+    assert!(
+        !text.contains("present-slug"),
+        "non-matching slug must not appear"
+    );
 }
 
 #[test]

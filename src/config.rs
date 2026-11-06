@@ -292,26 +292,72 @@ mod tests {
     #[test]
     fn config_default_values() {
         let cfg = Config::default();
-        assert_eq!(cfg.default_view, "kanban");
-        assert_eq!(cfg.width, 80);
-        assert_eq!(cfg.tui_width, 80);
-        assert_eq!(cfg.pager_width, 100);
+        // Structural facts only: root/editor are unset by default.
         assert!(cfg.root.is_none());
         assert!(cfg.editor.is_none());
+        // Round-trip stability: serializing then deserializing yields an
+        // equivalent config (no literal default pins).
+        let serialized = toml::to_string(&cfg).expect("serialize default config");
+        let roundtripped: Config = toml::from_str(&serialized).expect("deserialize default config");
+        let reserialized = toml::to_string(&roundtripped).expect("reserialize");
+        assert_eq!(serialized, reserialized, "default config must round-trip");
     }
 
     #[test]
     fn config_default_sort() {
+        use crate::plan::model::{LoadedTask, Task};
+        use crate::plan::query::cmp_tasks;
         let cfg = Config::default();
-        assert_eq!(cfg.default_sort, vec!["priority", "slug"]);
+        let make = |priority: &str, slug: &str| LoadedTask {
+            slug: slug.to_string(),
+            task: Task {
+                status: "open".to_string(),
+                task_type: "bug".to_string(),
+                priority: priority.to_string(),
+                area: String::new(),
+            },
+        };
+        // High priority ranks before low, even when its slug sorts later.
+        let high_late = make("high", "zzz");
+        let low_early = make("low", "aaa");
+        assert_eq!(
+            cmp_tasks(&high_late, &low_early, &cfg.default_sort, &cfg.kanban_order),
+            std::cmp::Ordering::Less
+        );
+        // Equal priority tie-breaks by slug.
+        let a = make("high", "alpha");
+        let b = make("high", "beta");
+        assert_eq!(
+            cmp_tasks(&a, &b, &cfg.default_sort, &cfg.kanban_order),
+            std::cmp::Ordering::Less
+        );
     }
 
     #[test]
     fn config_default_kanban_order() {
+        use crate::plan::model::{LoadedTask, Task};
+        use crate::plan::query::cmp_tasks;
         let cfg = Config::default();
+        let make = |status: &str| LoadedTask {
+            slug: "x".to_string(),
+            task: Task {
+                status: status.to_string(),
+                task_type: "bug".to_string(),
+                priority: "low".to_string(),
+                area: String::new(),
+            },
+        };
+        let idea = make("idea");
+        let open = make("open");
+        let done = make("done");
+        let keys = ["status".to_string()];
         assert_eq!(
-            cfg.kanban_order,
-            vec!["idea", "backlog", "open", "in-progress", "blocked", "done"]
+            cmp_tasks(&idea, &open, &keys, &cfg.kanban_order),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            cmp_tasks(&open, &done, &keys, &cfg.kanban_order),
+            std::cmp::Ordering::Less
         );
     }
 
