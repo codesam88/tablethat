@@ -24,7 +24,7 @@
 
 # Format configuration for `plan format`
 # [format]
-# width = 80
+# width = 72
 # reflow = true
 
 # Theme directory (default: ./themes/)

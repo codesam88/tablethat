@@ -45,8 +45,8 @@ the Options table (e.g. `PLAN_DEFAULT_VIEW`, `GLOSS_WIDTH`).
 | `tui_width` | `PLAN_TUI_WIDTH` / `GLOSS_TUI_WIDTH` | — | `80` | Render width for TUI views |
 | `pager_width` | `PLAN_PAGER_WIDTH` / `GLOSS_PAGER_WIDTH` | — | `100` | Render width for pager/`open` |
 | `width` | `PLAN_WIDTH` / `GLOSS_WIDTH` | `--width`/`-w` (gloss) | `80` | Render width for piped filter output |
-| `format.width` | `PLAN_FORMAT__WIDTH` / `GLOSS_FORMAT__WIDTH` | — | `80` | Wrap width for `plan format` |
-| `format.reflow` | `PLAN_FORMAT__REFLOW` / `GLOSS_FORMAT__REFLOW` | — | `true` | Join short lines into flow before re-splitting |
+| `format.width` | `PLAN_FORMAT__WIDTH` / `GLOSS_FORMAT__WIDTH` | `--width`/`-w` (`plan format`) | `72` | Wrap width for `plan format` |
+| `format.reflow` | `PLAN_FORMAT__REFLOW` / `GLOSS_FORMAT__REFLOW` | `--reflow`/`--no-reflow` (`plan format`) | `true` | Join short lines into flow before re-splitting |
 | `colors.status.*` | `PLAN_COLORS__STATUS__*` / `GLOSS_COLORS__STATUS__*` | — | see themes | Per-status kanban colors |
 | `colors.priority.*` | `PLAN_COLORS__PRIORITY__*` / `GLOSS_COLORS__PRIORITY__*` | — | see themes | Per-priority kanban colors |
 | — | — | `--config` (both, global) | auto-detect | Path to config file |
