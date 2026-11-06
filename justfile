@@ -7,9 +7,10 @@
 help:
     @just --list --unsorted
 
-# cargo fmt
+# autoformat rust + plans
 format:
     cargo fmt
+    cargo run --bin plan -- format -w 72
 
 # cargo fmt --check + cargo clippy
 check: zizmor-check

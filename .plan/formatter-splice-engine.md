@@ -7,8 +7,8 @@ area: backend
 
 ## Splice-engine markdown formatter
 
-Replace the format round-trip with conservative source-splicing:
-parse for structure, apply desired edits only, re-emit the rest
+Replace the format round-trip with conservative source-splicing: parse
+for structure, apply desired edits only, re-emit the rest
 byte-identical. Fixes short-line joining, hardbreak restyling,
 pipe-in-code-span table loss.
 
@@ -18,20 +18,19 @@ pipe-in-code-span table loss.
 
 Done: shared `comrak_options()` constructor (renderer + formatter).
 Requirements v3: configurable prose wrap (default 80, split-only,
-containers wrapped with continuation indent, code spans atomic).
-D-2 confirmed (keep pad-to-width pipe style).
-Implemented (4 worker items + 1 bugfix, senior-reviewed, all committed):
-skeleton + ws-strip, AST table alignment (incl. nested/quote fix),
-wrap + wiring + old-code deletion, format_width/format_reflow +
-reflow joins (restructured to `[format]` section + `docs/config.md`),
-wrap-bail fix (marker-like words no longer skip whole lines).
-Perf: whole-.plan format ~30ms, fixpoint clean. Open: PR checks,
-then merge decision (user).
+containers wrapped with continuation indent, code spans atomic). D-2
+confirmed (keep pad-to-width pipe style). Implemented (4 worker items +
+1 bugfix, senior-reviewed, all committed): skeleton + ws-strip, AST
+table alignment (incl. nested/quote fix), wrap + wiring + old-code
+deletion, format_width/format_reflow + reflow joins (restructured to
+`[format]` section + `docs/config.md`), wrap-bail fix (marker-like words
+no longer skip whole lines). Perf: whole-.plan format ~30ms, fixpoint
+clean. Open: PR checks, then merge decision (user).
 
 ## Plan
 
-Status: design (requirements + architecture + validation). Implementation
-breakdown follows in a second round.
+Status: design (requirements + architecture + validation).
+Implementation breakdown follows in a second round.
 
 ### 1. Requirements
 
@@ -66,8 +65,8 @@ tables or code blocks.
   (Reproduced bug 2.)
 - **FR-3 — Align tables without content loss.** Column padding via
   parser-given cell boundaries; pipes inside code spans or escaped pipes
-  are never treated as delimiters. Tables are never wrapped.
-  (Reproduced bug 3; data loss is the release-blocker of this project.)
+  are never treated as delimiters. Tables are never wrapped. (Reproduced
+  bug 3; data loss is the release-blocker of this project.)
 - **FR-4 — Wrap overlong prose to a configurable width (default 80).**
   Only source lines exceeding the width are split, at word boundaries;
   nothing is ever joined. Applies to top-level paragraphs *and* prose
@@ -92,8 +91,8 @@ tables or code blocks.
 - **FR-10 — Format configuration.** `format_width` (default 80) and
   `format_reflow` (default true) live in `Config` with standard layering
   (defaults < `plan.toml` < `PLAN_FORMAT_WIDTH` / `PLAN_FORMAT_REFLOW`
-  env), documented in `plan.toml.example` alongside the other widths.
-  No CLI flags in v1 (follow-up note).
+  env), documented in `plan.toml.example` alongside the other widths. No
+  CLI flags in v1 (follow-up note).
 
 #### Non-functional requirements
 
@@ -108,14 +107,14 @@ tables or code blocks.
   low milliseconds; measure the `.plan/` corpus before/after, no
   regression beyond noise. (`plan` starts in ~30 ms; formatting must not
   dominate the pre-commit hook.)
-- **NFR-5 — Purity.** The engine stays a pure `&str -> String` function
-  (no I/O), so every behavior is unit-testable.
+- **NFR-5 — Purity.** The engine stays a pure `&str -> String`
+  function (no I/O), so every behavior is unit-testable.
 
 #### Non-goals (v1)
 
 Indented→fenced conversion (dropped deliberately: diff noise, not
-normalization). Marker/heading/reference-link/code-span opinions.
-Table multiline cells (already deferred elsewhere). Frontmatter changes.
+normalization). Marker/heading/reference-link/code-span opinions. Table
+multiline cells (already deferred elsewhere). Frontmatter changes.
 Sentence-per-line (semantic) breaks — wrapping is width-driven only.
 
 #### Open decisions (need answers before implementation)
@@ -134,9 +133,10 @@ is a follow-up note, not v1 scope.
 `format_commonmark` (`src/markdown_fmt.rs`): build options → comrak
 `markdown_to_commonmark` with `render.width = 120` (this setting is the
 reflow mechanism behind bug 1) → hand-rolled `align_tables` string
-splitter (bug 3's mechanism) → blanket trailing-whitespace strip (would
-eat hardbreaks if comrak hadn't pre-converted them — bug 2's churn).
-Options constructor is now shared with the renderer (`comrak_options()`).
+splitter (bug 3's mechanism) → blanket trailing-whitespace strip
+(would eat hardbreaks if comrak hadn't pre-converted them — bug 2's
+churn). Options constructor is now shared with the renderer
+(`comrak_options()`).
 
 #### Target design
 
@@ -170,47 +170,45 @@ only thing the engine emits; everything else is the input.
 - **Wrapping.** Candidate source lines come from `Paragraph` (and
   definition-list definition) nodes: only lines over width are
   re-emitted. Words are whitespace-separated tokens with inline code
-  spans resolved to atomic units via each span's source range (a span
-  is never split even across a soft break it contains). The
-  continuation prefix is derived from the container chain
-  (blockquote `> `, list marker width, definition indent) and
-  re-applied to every emitted line after the first. Hardbreak nodes
-  split the wrapping unit (FR-2). A single overlong word overflows
-  untouched (FR-5).
+  spans resolved to atomic units via each span's source range (a span is
+  never split even across a soft break it contains). The continuation
+  prefix is derived from the container chain (blockquote `> `, list
+  marker width, definition indent) and re-applied to every emitted line
+  after the first. Hardbreak nodes split the wrapping unit (FR-2). A
+  single overlong word overflows untouched (FR-5).
 - **Module layout.** All inside `src/markdown_fmt.rs`: `parse`,
-  `collect_edits`, `apply_edits` as private helpers;
-  `format_commonmark` keeps its signature (FR-9) and becomes
-  parse-collect-apply. `src/plan/format.rs` and `src/markdown.rs`
-  unchanged by this project.
+  `collect_edits`, `apply_edits` as private helpers; `format_commonmark`
+  keeps its signature (FR-9) and becomes parse-collect-apply.
+  `src/plan/format.rs` and `src/markdown.rs` unchanged by this project.
 - **Frontmatter boundary.** Unchanged: `plan/format.rs` strips
   frontmatter first and feeds body-only text to the engine.
 
 ### 3. Validation strategy
 
 - **TDD, one failing test per FR before implementation:** short
-  soft-break lines preserved (never joined); a 600+ char list item
-  wraps with continuation indent; hardbreak flavors preserved with
-  independent segment wrapping; piped-code-span table aligns
-  losslessly; overlong top-level paragraph splits at word boundaries;
-  code span crossing the width stays atomic (neighbors break around
-  it); single overlong word overflows; nested list / blockquote /
-  definition prose wraps with correct prefixes; trailing-ws stripped
-  with hardbreak exemption. Reflow tests (run with reflow on): short
-  lines join into flow and re-split to width; containers reflow with
-  indents; hardbreak segments stay independent; reflow fixpoint. Each
-  test also asserts NFR-2 (HTML-equivalence) for its input.
-- **Fixpoint corpus test:** a mixed file (all of the above plus headings,
-  lists, code blocks, HTML) formats to a fixpoint; extends the existing
-  `formatter_is_idempotent` pin rather than replacing it.
-- **Corpus sweep (test, not committed files):** run the engine over every
-  repo Markdown file (`.plan/`, README, CHANGELOG, docs) asserting
+  soft-break lines preserved (never joined); a 600+ char list item wraps
+  with continuation indent; hardbreak flavors preserved with independent
+  segment wrapping; piped-code-span table aligns losslessly; overlong
+  top-level paragraph splits at word boundaries; code span crossing the
+  width stays atomic (neighbors break around it); single overlong word
+  overflows; nested list / blockquote / definition prose wraps with
+  correct prefixes; trailing-ws stripped with hardbreak exemption.
+  Reflow tests (run with reflow on): short lines join into flow and
+  re-split to width; containers reflow with indents; hardbreak segments
+  stay independent; reflow fixpoint. Each test also asserts NFR-2
+  (HTML-equivalence) for its input.
+- **Fixpoint corpus test:** a mixed file (all of the above plus
+  headings, lists, code blocks, HTML) formats to a fixpoint; extends the
+  existing `formatter_is_idempotent` pin rather than replacing it.
+- **Corpus sweep (test, not committed files):** run the engine over
+  every repo Markdown file (`.plan/`, README, CHANGELOG, docs) asserting
   fixpoint + HTML-equivalence. Catches construct coverage the unit tests
   miss.
-- **Regression gates (unchanged):** `just precommit` (fmt/clippy/zizmor +
-  full suite + goldens), `plan lint` exit 0. Intended behavior change to
-  eyeball in review: indented code blocks are no longer converted to
-  fenced (non-goal); the corpus sweep shows exactly which files that
-  touches.
+- **Regression gates (unchanged):** `just precommit`
+  (fmt/clippy/zizmor + full suite + goldens), `plan lint` exit 0.
+  Intended behavior change to eyeball in review: indented code blocks
+  are no longer converted to fenced (non-goal); the corpus sweep shows
+  exactly which files that touches.
 - **Performance gate:** time `normalize_all` over the `.plan/` corpus
   before/after; flag anything beyond noise per NFR-4.
 - **Definition of done:** all FR tests green, fixpoint + equivalence

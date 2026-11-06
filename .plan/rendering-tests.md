@@ -21,21 +21,27 @@ area: testing
 
 #### Formatting pipeline (format\_commonmark)
 
-The `format_commonmark()` function chains three steps: comrak formatting → `align_tables()` →
-`strip_trailing_whitespace()`. No tests cover this pipeline.
+The `format_commonmark()` function chains three steps: comrak formatting
+→ `align_tables()` → `strip_trailing_whitespace()`. No tests cover
+this pipeline.
 
 **Test cases needed:**
 
 - Table alignment: verify columns are padded to equal width
-- Table alignment: verify alignment markers (`:--`, `:-:`, `--:`) are preserved
-- Table alignment: verify indented tables (inside list items) are handled
-- Fenced code blocks: verify they're preserved (not converted to indented)
+- Table alignment: verify alignment markers (`:--`, `:-:`, `--:`) are
+  preserved
+- Table alignment: verify indented tables (inside list items) are
+  handled
+- Fenced code blocks: verify they're preserved (not converted to
+  indented)
 - Trailing whitespace: verify all lines are trimmed
 - Text wrapping: verify paragraphs wrap at specified width
 - Task lists: verify `- [x]` / `- [ ]` items are preserved
-- Nested content: verify tables/code blocks inside list items stay nested
+- Nested content: verify tables/code blocks inside list items stay
+  nested
 
-**Approach:** Snapshot/golden-file tests. For each test case, provide input markdown and expected output. Compare
+**Approach:** Snapshot/golden-file tests. For each test case, provide
+input markdown and expected output. Compare
 `format_commonmark(input, width)` against expected.
 
 ```
@@ -50,7 +56,8 @@ tests/
 
 #### Markdown rendering (render\_markdown)
 
-The `render_markdown()` function produces `Vec<Line<Span>>` for ratatui. Only one test covers table rendering.
+The `render_markdown()` function produces `Vec<Line<Span>>` for ratatui.
+Only one test covers table rendering.
 
 **Test cases needed:**
 
@@ -63,8 +70,9 @@ The `render_markdown()` function produces `Vec<Line<Span>>` for ratatui. Only on
 - Empty input: verify no panic
 - Frontmatter: verify it's stripped before rendering
 
-**Approach:** Check that specific spans have expected styles. The `Vec<Line<Span>>` output can be inspected for both
-content and style properties.
+**Approach:** Check that specific spans have expected styles. The
+`Vec<Line<Span>>` output can be inspected for both content and style
+properties.
 
 #### Slug resolution
 
@@ -79,7 +87,8 @@ content and style properties.
 - No match: returns empty
 - Priority: exact \> prefix \> substring
 
-**Approach:** Create temp `.plan/` directory with test files, run resolution, verify results.
+**Approach:** Create temp `.plan/` directory with test files, run
+resolution, verify results.
 
 #### Filter mode (gloss)
 
@@ -91,12 +100,14 @@ content and style properties.
 - Verify stdin → stdout pipeline works
 - Verify frontmatter is stripped
 
-**Approach:** Capture stdout, compare against expected. May need to mock stdin.
+**Approach:** Capture stdout, compare against expected. May need to mock
+stdin.
 
 ### Recommended implementation order
 
 1. **Formatting snapshot tests** — highest value, easiest to write
-2. **Markdown rendering style tests** — catch regressions in theme application
+2. **Markdown rendering style tests** — catch regressions in theme
+   application
 3. **Slug resolution tests** — pure logic, easy to test
 4. **Filter mode tests** — need to figure out stdin/stdout capture
 
