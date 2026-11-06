@@ -48,17 +48,12 @@ Integration tests live in `tests/` (`cli_e2e.rs`, `gloss_render.rs`,
 ## Testing policy
 
 Test functional invariants, not policy, implementation, or literals. Every test
-should asserts a behavior of the system, not a detail of its current shape: Use
-fixpoints (format twice == format once), bounds (`line.len() <= width`),
-ordering relations, exit-code + file-existence contracts, content preservation
-(`html_eq`, body survives), error-vs-success. Exact matches only for values the
-test itself synthesized. Golden input/output reference vectors (`tests/golden/`)
-can can be used to pin overall behavior and catch regressions.
+should asserts a behavior of the system, not a detail of its current shape.
 
-No vacuous tests for non-effects or non-existing strings are permitted. A test that trivially passes on removed/damaged code is not a test.
+When adding or adjusting tests, be careful to not construct vacuous tests.
+A test that trivially passes on removed/damaged code is empty and only creates churn.
+Consider what are the real invariants that can usefully be tested.
 
-When adjusting tests, consider if the test becomes vacuous or if better
-invariants can be found.
 
 ## Crate structure
 
