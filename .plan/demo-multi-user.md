@@ -9,8 +9,9 @@ area: backend
 
 ### Problem
 
-The .plan/ directory is local filesystem only. Two people can't work on the same board without sharing a filesystem
-(NFS, shared git repo). There's no locking, no conflict resolution, no real-time sync.
+The .plan/ directory is local filesystem only. Two people can't work on
+the same board without sharing a filesystem (NFS, shared git repo).
+There's no locking, no conflict resolution, no real-time sync.
 
 ### Approaches
 
@@ -23,16 +24,17 @@ The .plan/ directory is local filesystem only. Two people can't work on the same
 
 ### Git-based (simplest)
 
-Treat .plan/ as the source of truth. Users `git pull` before working, `git push` after. Conflicts are regular git
-conflicts on YAML frontmatter.
+Treat .plan/ as the source of truth. Users `git pull` before working,
+`git push` after. Conflicts are regular git conflicts on YAML
+frontmatter.
 
 ```
 User A:  plan add feature-x  ─►  git push
 User B:  git pull            ─►  plan list (sees feature-x)
 ```
 
-**Pros:** No new infrastructure. Works today. **Cons:** No real-time. Merge conflicts on YAML are ugly. No presence
-awareness.
+**Pros:** No new infrastructure. Works today. **Cons:** No real-time.
+Merge conflicts on YAML are ugly. No presence awareness.
 
 ### Server-based
 
@@ -51,8 +53,9 @@ User B  ──WS────►  plan server  ◄─inotify──────
 
 ### CRDT-based
 
-Each .plan/\*.md file becomes a CRDT document (automerge, yrs). Frontmatter fields merge automatically, body text uses
-operational transform.
+Each .plan/\*.md file becomes a CRDT document (automerge, yrs).
+Frontmatter fields merge automatically, body text uses operational
+transform.
 
 ```toml
 # .plan/feature-x.md — CRDT-merged
@@ -74,12 +77,15 @@ Body text here...   # ← harder, needs OT or block-level merge
 | `area`     | string            | Last-write-wins                |
 | Body text  | freeform markdown | Block-level or last-write-wins |
 
-Frontmatter is trivially mergeable. Body text is the hard part — but for task management, the frontmatter is what
-matters most.
+Frontmatter is trivially mergeable. Body text is the hard part — but
+for task management, the frontmatter is what matters most.
 
 ### Exploration needed
 
-- How do other file-based tools handle this? `todo.txt` has no sync. `org-mode` uses git or org-protocol. Obsidian uses
-  git or their paid sync service.
-- Is "share via git" good enough for v1? Probably yes — document the workflow, revisit real-time later.
-- Does this even belong in the core tool? Or is it a separate `plan-sync` utility?
+- How do other file-based tools handle this? `todo.txt` has no sync.
+  `org-mode` uses git or org-protocol. Obsidian uses git or their paid
+  sync service.
+- Is "share via git" good enough for v1? Probably yes — document the
+  workflow, revisit real-time later.
+- Does this even belong in the core tool? Or is it a separate
+  `plan-sync` utility?

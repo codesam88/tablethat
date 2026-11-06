@@ -7,23 +7,26 @@ area: backend
 
 ## Notes
 
-Fix batch from the 2026-10-31 posture review (all claims challenger-held,
-parent-verified). Order: deps first, then data integrity, crash, gates,
-then ride-alongs.
+Fix batch from the 2026-10-31 posture review (all claims
+challenger-held, parent-verified). Order: deps first, then data
+integrity, crash, gates, then ride-alongs.
 
 ## Steps
 
-- [x] Step 0: `cargo update`, verify suite + deny/audit, commit lockfile.
-- [x] Step 1: frontmatter injection — validate values in `create_task`,
-  YAML-quote strings in `value_to_yaml_str` (TDD).
-- [x] Step 2: gloss highlight Unicode panic — char-aware offsets (TDD).
+- [x] Step 0: `cargo update`, verify suite + deny/audit, commit
+      lockfile.
+- [x] Step 1: frontmatter injection — validate values in
+      `create_task`, YAML-quote strings in `value_to_yaml_str` (TDD).
+- [x] Step 2: gloss highlight Unicode panic — char-aware offsets
+      (TDD).
 - [x] Step 3: release gates — test/clippy/audit before publish.
 - [x] Step 4: pin action SHAs.
 - [x] Step 5: `list_tasks` returns `Result` (drop lib `exit`).
 - [x] Step 6: slug truncation char boundary (+ helper test).
 - [x] Step 7: MSRV job runs check + smoke, not just test.
 - [x] Step 8: fix intra-doc links (`cargo doc` clean).
-- [x] Step 9: sorted `format <dir>` + surface `read_dir` errors (helper + test).
+- [x] Step 9: sorted `format <dir>` + surface `read_dir` errors
+      (helper + test).
 - [x] Step 10: `multiple-versions` policy — decide, document, set.
 
 ## Acceptance
@@ -41,13 +44,13 @@ then ride-alongs.
 - 2026-10-31: Step 6 DONE (TDD: helper RED missing, GREEN first pass).
   `truncate_slug` floors to char boundary, byte-identical for ASCII;
   both call sites deduplicated through it. 3 tests, 125 green.
-- 2026-10-31: Step 5 DONE (TDD: test RED uncompilable, GREEN first pass).
-  `list_tasks -> Result<(), String>`; 4 CLI arms use `?`; lib has zero
-  `process::exit` left. Test uses `.plan`-as-file trick for portable
-  unreadable-dir failure. 122 green.
-- 2026-10-31: Step 4 DONE (config-only). All 18 action refs pinned to SHAs
-  (resolved via GitHub API today) with `# vX` comments so Dependabot keeps
-  updating them. YAML validated.
+- 2026-10-31: Step 5 DONE (TDD: test RED uncompilable, GREEN first
+  pass). `list_tasks -> Result<(), String>`; 4 CLI arms use `?`; lib has
+  zero `process::exit` left. Test uses `.plan`-as-file trick for
+  portable unreadable-dir failure. 122 green.
+- 2026-10-31: Step 4 DONE (config-only). All 18 action refs pinned to
+  SHAs (resolved via GitHub API today) with `# vX` comments so
+  Dependabot keeps updating them. YAML validated.
 - 2026-10-31: Step 3 DONE (config-only). `verify` job (check + test +
   audit, same pinned actions as CI) gates `build`; chain verified via
   YAML parse. Tags can no longer ship red.

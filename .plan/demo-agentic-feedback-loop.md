@@ -9,8 +9,10 @@ area: backend
 
 ### Problem
 
-The current AI agent integration is one-directional — agents create tasks in .plan/, humans review manually. There's
-no mechanism for agents to receive feedback, update task status based on CI results, or autonomously iterate on work.
+The current AI agent integration is one-directional — agents create
+tasks in .plan/, humans review manually. There's no mechanism for agents
+to receive feedback, update task status based on CI results, or
+autonomously iterate on work.
 
 ### Current state
 
@@ -39,8 +41,8 @@ Agent ──creates──► .plan/task.md  ──human edits──►  .plan/ta
 
 ### Level 1: Read feedback (minimal)
 
-Agent reads .plan/ on each invocation. If a human changed status from `open` to `blocked` and added a note, the agent
-sees it next time:
+Agent reads .plan/ on each invocation. If a human changed status from
+`open` to `blocked` and added a note, the agent sees it next time:
 
 ```markdown
 ---
@@ -70,11 +72,13 @@ plan list -s open          # discover work
 plan format .plan/task.md  # clean up
 ```
 
-Needs: agent-friendly CLI commands. Already works — `plan add`, `plan open`, `plan format` exist.
+Needs: agent-friendly CLI commands. Already works — `plan add`,
+`plan open`, `plan format` exist.
 
 ### Level 3: CI integration (high)
 
-Full loop: agent creates task → opens PR → CI runs → agent reads results → fixes failures → re-pushes.
+Full loop: agent creates task → opens PR → CI runs → agent reads
+results → fixes failures → re-pushes.
 
 ```
 Agent ──► plan add fix-auth
@@ -96,7 +100,8 @@ Agent ──► plan add fix-auth
 
 ### Level 4: MCP / API integration
 
-Expose plan operations as MCP tools so agents can call them programmatically:
+Expose plan operations as MCP tools so agents can call them
+programmatically:
 
 ```json
 {
@@ -112,7 +117,8 @@ Expose plan operations as MCP tools so agents can call them programmatically:
 }
 ```
 
-The plan CLI already has the right interface for this — each subcommand maps to an MCP tool.
+The plan CLI already has the right interface for this — each
+subcommand maps to an MCP tool.
 
 ### Trust and policy
 
@@ -129,14 +135,14 @@ The plan CLI already has the right interface for this — each subcommand maps t
 
 - How do agents discover task changes? Options:
 
-  | Method | Latency | Portability | Complexity |
-  | --- | --- | --- | --- |
-  | Poll on each invocation | High | High | Low |
-  | inotify/fswatch | Low | Linux/macOS | Medium |
-  | File hash comparison | Medium | High | Low |
+  | Method                  | Latency | Portability | Complexity |
+  | ----------------------- | ------- | ----------- | ---------- |
+  | Poll on each invocation | High    | High        | Low        |
+  | inotify/fswatch         | Low     | Linux/macOS | Medium     |
+  | File hash comparison    | Medium  | High        | Low        |
 
-- What's the minimal MCP server? A thin wrapper around the plan CLI binary. Could be 100 lines of Rust using the `rmcp`
-  crate.
+- What's the minimal MCP server? A thin wrapper around the plan CLI
+  binary. Could be 100 lines of Rust using the `rmcp` crate.
 
-- Should agent-created tasks be marked differently? E.g., `area: agent` or a frontmatter field `created_by: agent` for
-  auditability.
+- Should agent-created tasks be marked differently? E.g., `area: agent`
+  or a frontmatter field `created_by: agent` for auditability.
