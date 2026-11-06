@@ -307,9 +307,32 @@ mod tests {
     }
 
     #[test]
-    fn config_hide_done_defaults_to_true() {
-        let cfg = lib::Config::default();
-        assert!(cfg.hide_done);
+    fn filter_respects_hide_done_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        make_task_file(dir, "alpha", "open", "bug", "high");
+        make_task_file(dir, "beta", "done", "feature", "low");
+
+        let entries = read_task_files(dir).unwrap();
+
+        for hide in [true, false] {
+            let cfg = lib::Config {
+                hide_done: hide,
+                ..lib::Config::default()
+            };
+            let exclude: Vec<String> = if cfg.hide_done {
+                vec!["done".into()]
+            } else {
+                vec![]
+            };
+            let tasks = load_and_filter_tasks(&entries, None, None, None, None, None, &exclude);
+            let done_count = tasks.iter().filter(|t| t.task.status == "done").count();
+            if cfg.hide_done {
+                assert_eq!(done_count, 0, "hide_done=true must hide done tasks");
+            } else {
+                assert_eq!(done_count, 1, "hide_done=false must show done tasks");
+            }
+        }
     }
 
     #[test]

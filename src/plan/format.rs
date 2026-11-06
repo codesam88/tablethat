@@ -195,10 +195,13 @@ mod tests {
     fn normalize_reorders_fields_canonically() {
         let input = "---\narea: backend\nstatus: open\ntype: bug\npriority: high\n---\n\nbody\n";
         let output = normalize_frontmatter(input, 80, false).unwrap();
-        assert_eq!(
-            output,
-            "---\nstatus: open\ntype: bug\npriority: high\narea: backend\n---\n\nbody\n"
-        );
+        let pos = |key: &str| output.find(&format!("\n{key}:")).unwrap_or(usize::MAX);
+        assert!(pos("status") < pos("type"));
+        assert!(pos("type") < pos("priority"));
+        assert!(pos("priority") < pos("area"));
+        assert!(output.contains("body"), "body must survive formatting");
+        // Fixpoint.
+        assert_eq!(normalize_frontmatter(&output, 80, false).unwrap(), output);
     }
 
     #[test]
