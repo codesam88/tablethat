@@ -20,11 +20,11 @@ markdown:
    `plan: error: no schema found (searched .plan/.schema.json, config dir, data dir)`.
    Cause: `validate_all` (`src/plan/lint.rs`) returns a hard `Err` when
    `resolve_file` finds no schema. A directory with no `.plan/`
-   workspace and no schema cannot be linted at all — not even for
-   checks (YAML well-formedness, mapping shape) that need no schema.
-   User proposal: warn but continue without schema enforcement.
-2. `cargo run -q --bin plan -- format tests/misc --check` → exit 1
-   with exactly one failure:
+   workspace and no schema cannot be linted at all — not even for checks
+   (YAML well-formedness, mapping shape) that need no schema. User
+   proposal: warn but continue without schema enforcement.
+2. `cargo run -q --bin plan -- format tests/misc --check` → exit 1 with
+   exactly one failure:
    `tests/misc/openapi-reference.md: cannot normalize — YAML parse error: line 2 column 16: block sequence entries are not allowed in this context`
    (its frontmatter has `language_tabs: - shell: Shell`,
    Slate/Widdershins-style invalid YAML). Cause: `format_file`
@@ -97,8 +97,8 @@ Two-track approach, one per command:
 Rejected alternatives and their decisive drawbacks:
 
 1. **Strip frontmatter from general markdown before formatting.**
-   Drawback: data loss by design — format would silently delete
-   metadata the tool does not understand. Unacceptable for a formatter.
+   Drawback: data loss by design — format would silently delete metadata
+   the tool does not understand. Unacceptable for a formatter.
 2. **Fix up invalid YAML heuristically (e.g. special-case Slate-style
    `key: - item` sequences).** Drawback: unbounded dialect-specific
    repair logic inside a formatter; every new corpus adds a new dialect.
@@ -115,8 +115,8 @@ Rejected alternatives and their decisive drawbacks:
    fields) out of nothing; a lint that always passes its invented schema
    is theater. Skipping schema checks openly with a warning is honest.
 
-Open questions (decision-or-defer — none of these are decided here;
-the implementing worker must get answers before starting steps 2–5):
+Open questions (decision-or-defer — none of these are decided here; the
+implementing worker must get answers before starting steps 2–5):
 
 - **Q1 — schema-missing lint scope.** (a) Global relax: `validate_all`
   warns-but-continues whenever no schema resolves, including inside a
@@ -142,20 +142,19 @@ the implementing worker must get answers before starting steps 2–5):
   cannot preserve comments, key order, or block-scalar styles.
 - **Q4 — `lint` PATH argument.** Does `lint` gain an optional `[PATH]`
   (file or dir) for symmetry with `format [PATH]`, defaulting to the
-  current whole-`.plan`-tree behavior with no arg? Recommendation: yes
-  — without it Q1's relax-only-for-explicit-PATH has no explicit path
-  to key on, and single-file lint is the natural debugging companion to
+  current whole-`.plan`-tree behavior with no arg? Recommendation: yes —
+  without it Q1's relax-only-for-explicit-PATH has no explicit path to
+  key on, and single-file lint is the natural debugging companion to
   single-file format.
-- **Q5 — fate of the `tests/misc` corpus.** It is ~165 untracked files
-  — far too heavy to commit as fixtures. Curate 2–4 representative
-  files into `tests/fixtures/` (or inline strings in unit tests)?
-  Suggested set: one no-frontmatter file (e.g. `admin-cli.md` style),
-  one valid frontmatter file, `openapi-reference.md` (invalid Slate
-  YAML), and one `---`-body file where `---` is a thematic break, not
-  frontmatter (if such exists in the corpus; else synthesize). Remainder
-  stays untracked local-only corpus, never committed. Recommendation:
-  inline strings for unit tests + at most 2–4 tiny curated fixture
-  files.
+- **Q5 — fate of the `tests/misc` corpus.** It is ~165 untracked files —
+  far too heavy to commit as fixtures. Curate 2–4 representative files
+  into `tests/fixtures/` (or inline strings in unit tests)? Suggested
+  set: one no-frontmatter file (e.g. `admin-cli.md` style), one valid
+  frontmatter file, `openapi-reference.md` (invalid Slate YAML), and one
+  `---`-body file where `---` is a thematic break, not frontmatter (if
+  such exists in the corpus; else synthesize). Remainder stays untracked
+  local-only corpus, never committed. Recommendation: inline strings for
+  unit tests + at most 2–4 tiny curated fixture files.
 
 ## Decisions (settled with user 2026-11-06 — all recommendations accepted)
 
@@ -353,12 +352,11 @@ Leaves-out: `src/` behavior changes, docs, gloss, TUI.
   `format.rs:77` `normalize_frontmatter`): covered, no re-derivation
   beyond the two permitted `read`s (corpus spot-checks already supplied
   as verified facts).
-- All five decision points (a)–(e) appear as open questions Q1–Q5
-  with recommendations but no decisions: covered; steps 1–3 are
-  written against the defaults but explicitly conditional on interview
-  answers.
-- Steps ordered failing-tests → lint → format → docs → fixtures,
-  one worker invocation each, each with scope/files, exact-command
+- All five decision points (a)–(e) appear as open questions Q1–Q5 with
+  recommendations but no decisions: covered; steps 1–3 are written
+  against the defaults but explicitly conditional on interview answers.
+- Steps ordered failing-tests → lint → format → docs → fixtures, one
+  worker invocation each, each with scope/files, exact-command
   done-criteria, and leaves-out: covered.
 - Out-of-scope names gloss, schema-format, upstream Slate fix, TUI:
   covered, plus corpus non-absorption.
@@ -382,19 +380,19 @@ Leaves-out: `src/` behavior changes, docs, gloss, TUI.
   `slate_invalid_yaml_is_skipped` bool-assert rewritten (`assert!`,
   clippy-clean). Step 2 authorized next.
 - 2026-11-07 — Step 2 implemented (worker) + parent review. Findings:
-  (a) corpus incident — `tests/misc/openapi-reference.md` was
-  rewritten at 23:48 (frontmatter lines 3–11 changed) by an unknown
-  hand; worker audit shows read-only commands. Parent restored
-  first-seen bytes (body verified identical, lines 19+); both original
-  failures reproduce. If you edited it intentionally, say so —
-  otherwise avoid touching `tests/misc/` during the build. (b) Design
-  gap caught in review: schemaless lint FAILs files with no frontmatter
-  at all (`admin-cli.md`, `SUMMARY.md`, …) — useless on general
-  markdown, where most files have none. Decision: schemaless + file does
-  not start with `---` → skip silently (nothing to validate); schema
-  mode keeps today's error; `---`-led files keep full structural checks
-  in both modes. Fix-up (skip + `lint_no_schema_no_frontmatter_skipped`
-  test) sent back to worker before Step 3.
+  (a) corpus incident — `tests/misc/openapi-reference.md` was rewritten
+  at 23:48 (frontmatter lines 3–11 changed) by an unknown hand; worker
+  audit shows read-only commands. Parent restored first-seen bytes (body
+  verified identical, lines 19+); both original failures reproduce. If
+  you edited it intentionally, say so — otherwise avoid touching
+  `tests/misc/` during the build. (b) Design gap caught in review:
+  schemaless lint FAILs files with no frontmatter at all
+  (`admin-cli.md`, `SUMMARY.md`, …) — useless on general markdown, where
+  most files have none. Decision: schemaless + file does not start with
+  `---` → skip silently (nothing to validate); schema mode keeps today's
+  error; `---`-led files keep full structural checks in both modes.
+  Fix-up (skip + `lint_no_schema_no_frontmatter_skipped` test) sent back
+  to worker before Step 3.
 - 2026-11-07 — Fix-up verified by parent: `plan::lint` 6/6 green; full
   `plan::` 74 pass / 4 fail (exactly the Step-1 format reds);
   `lint -r tests/misc` now reports only genuine `---`-led breakage
@@ -403,13 +401,13 @@ Leaves-out: `src/` behavior changes, docs, gloss, TUI.
   general-verbatim format path + invalid-YAML skip, plus task-path
   hardening of the multi-line re-emit (`{k}:` + block lines, never
   inline) so exotic task values cannot corrupt either.
-- 2026-11-07 — Step 3 done + parent-verified: `plan::` 79/79 green,
-  full `cargo test` 240 green, `just check` clean. Dual dispatch
-  accepted (content-based in `format_file` = defense in depth;
-  location-based in main.rs). Verified: corpus `--check` = 1 line
-  (openapi skip-warning), exit 0; write-mode skip is byte-identical;
-  task list-values emit block style; `.plan` tree canonical. Steps 4
-  (docs) + 5 (fixtures) authorized in parallel.
+- 2026-11-07 — Step 3 done + parent-verified: `plan::` 79/79 green, full
+  `cargo test` 240 green, `just check` clean. Dual dispatch accepted
+  (content-based in `format_file` = defense in depth; location-based in
+  main.rs). Verified: corpus `--check` = 1 line (openapi skip-warning),
+  exit 0; write-mode skip is byte-identical; task list-values emit block
+  style; `.plan` tree canonical. Steps 4 (docs) + 5 (fixtures)
+  authorized in parallel.
 - 2026-11-07 — Steps 4+5 done + parent-verified: docs describe
   `lint [PATH]` / task-vs-general contracts (grep hits + help
   transcripts ok); 4 hand-written fixtures + 3 e2e tests, cli_e2e 22/22
@@ -419,10 +417,10 @@ Leaves-out: `src/` behavior changes, docs, gloss, TUI.
   context (config/schema/.plan discovery); `(overrides ...)` dropped
   from format help flags; `--root` vs `[PATH]` contrast documented in
   `docs/commands.md`. Full suite + `just check` green.
-- 2026-11-07 — Step 3 done + parent-verified: `plan::` 79/79 green,
-  full `cargo test` 240 green, `just check` clean. Dual dispatch
-  accepted (content-based in `format_file` = defense in depth;
-  location-based in main.rs). Verified: corpus `--check` = 1 line
-  (openapi skip-warning), exit 0; write-mode skip is byte-identical;
-  task list-values emit block style; `.plan` tree canonical. Steps 4
-  (docs) + 5 (fixtures) authorized in parallel.
+- 2026-11-07 — Step 3 done + parent-verified: `plan::` 79/79 green, full
+  `cargo test` 240 green, `just check` clean. Dual dispatch accepted
+  (content-based in `format_file` = defense in depth; location-based in
+  main.rs). Verified: corpus `--check` = 1 line (openapi skip-warning),
+  exit 0; write-mode skip is byte-identical; task list-values emit block
+  style; `.plan` tree canonical. Steps 4 (docs) + 5 (fixtures)
+  authorized in parallel.
