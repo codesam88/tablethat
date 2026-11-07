@@ -87,7 +87,7 @@ Modes:
 Flags: `--config PATH`, `--no-color`, `--theme NAME`, `--width/-w COLS`,
 `--no-scrollbar`.
 
-Base width = `-w` or live terminal width minus scrollbar/gap (else 80); prose clamped to 40-120 columns and tables to 60-160.
+Base width = `-w` or live terminal width minus pad/scrollbar/gap (else 80); prose clamped to 40-120 columns and tables to 60-160.
 
 ## Dev recipes (justfile)
 

@@ -225,10 +225,12 @@ impl App {
     }
 
     /// Wrap width for rendering: the configured target, capped at the
-    /// terminal width minus the scrollbar reservation (1-char bar + 1-char
-    /// gap) when enabled. Never exceeds what fits on screen.
+    /// terminal width minus the paragraph reservation (1-char left pad,
+    /// plus 1-char bar + 1-char gap when the scrollbar is enabled).
+    /// Content rendered at this width exactly fills the text rect, so the
+    /// right-hand border never reaches the scrollbar gap.
     fn effective_width(setting: usize, term_cols: usize, scrollbar: bool) -> usize {
-        let reserved = if scrollbar { 2 } else { 0 };
+        let reserved = 1 + if scrollbar { 2 } else { 0 };
         setting.min(term_cols.saturating_sub(reserved))
     }
 
@@ -779,10 +781,11 @@ mod scrollbar_tests {
         // Explicit setting is honored when it fits …
         assert_eq!(App::effective_width(80, 100, true), 80);
         assert_eq!(App::effective_width(80, 100, false), 80);
-        // … but never exceeds the terminal minus bar + gap, so a default
-        // (terminal-width) setting always leaves 1 char before the bar.
-        assert_eq!(App::effective_width(100, 100, true), 98);
-        assert_eq!(App::effective_width(100, 100, false), 100);
+        // … but never exceeds the terminal minus pad + bar + gap, so a
+        // default (terminal-width) setting always leaves the 1-char pad
+        // before content and 1 char of gap before the bar.
+        assert_eq!(App::effective_width(100, 100, true), 97);
+        assert_eq!(App::effective_width(100, 100, false), 99);
     }
 
     #[test]
@@ -792,7 +795,7 @@ mod scrollbar_tests {
 
     #[test]
     fn effective_width_saturates_on_narrow_terminal() {
-        assert_eq!(App::effective_width(80, 10, true), 8);
+        assert_eq!(App::effective_width(80, 10, true), 7);
         assert_eq!(App::effective_width(80, 1, true), 0);
     }
 

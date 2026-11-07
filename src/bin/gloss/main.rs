@@ -27,7 +27,7 @@ struct Cli {
     theme: Option<String>,
 
     /// Base wrap width for markdown rendering.
-    /// Base = -w, or live terminal width minus scrollbar/gap, else 80.
+    /// Base = -w, or live terminal width minus pad/scrollbar/gap, else 80.
     /// Prose is clamped to 40-120 columns; tables to 60-160.
     #[arg(short, long, value_name = "COLS")]
     width: Option<usize>,
