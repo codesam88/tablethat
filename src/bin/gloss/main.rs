@@ -26,9 +26,9 @@ struct Cli {
     #[arg(long, value_name = "NAME")]
     theme: Option<String>,
 
-    /// Wrap width for markdown rendering (default: terminal width, else 80).
-    /// The TUI reserves 2 columns for scrollbar + gap; effective width is
-    /// the smaller of this and the usable terminal width.
+    /// Base wrap width for markdown rendering.
+    /// Base = -w, or live terminal width minus scrollbar/gap, else 80.
+    /// Prose is clamped to 40-120 columns; tables to 60-160.
     #[arg(short, long, value_name = "COLS")]
     width: Option<usize>,
 

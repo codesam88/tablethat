@@ -390,7 +390,12 @@ fn highlight_desc_term(mut body: Vec<Span<'static>>, th: &MarkdownTheme) -> Vec<
     out
 }
 
-fn render_table(node: &comrak::Node<'_>, lines: &mut Vec<Line<'static>>, ascii: bool) {
+fn render_table(
+    node: &comrak::Node<'_>,
+    lines: &mut Vec<Line<'static>>,
+    ascii: bool,
+    table_hi: usize,
+) {
     let mut tbl: Vec<Vec<String>> = Vec::new();
     for row_node in node.children() {
         if let NodeValue::TableRow(_) = row_node.data.borrow().value {
@@ -457,15 +462,13 @@ fn render_table(node: &comrak::Node<'_>, lines: &mut Vec<Line<'static>>, ascii: 
 
     let border_w = ncols * 3 + 1;
     let p80_total: usize = cols.iter().map(|c| c.p80).sum::<usize>() + border_w;
-    let base_target = 78usize;
-    let wide_target = 160usize;
-    let target = if p80_total <= wide_target {
-        base_target
+    let target = if p80_total <= table_hi {
+        60usize
             .max(p80_total)
-            .min(wide_target)
+            .min(table_hi)
             .saturating_sub(border_w)
     } else {
-        base_target.saturating_sub(border_w)
+        60usize.saturating_sub(border_w)
     };
 
     let mut col_w: Vec<usize> = cols.iter().map(|c| c.p60).collect();
@@ -611,13 +614,14 @@ fn render_node(
     th: &MarkdownTheme,
     lines: &mut Vec<Line<'static>>,
     wrap: usize,
+    table_hi: usize,
     ascii: bool,
 ) {
     let data = node.data.borrow();
     match &data.value {
         NodeValue::Document | NodeValue::FrontMatter(_) => {
             for child in node.children() {
-                render_node(&child, th, lines, wrap, ascii);
+                render_node(&child, th, lines, wrap, table_hi, ascii);
             }
         }
         NodeValue::Heading(heading) => {
@@ -644,12 +648,12 @@ fn render_node(
         }
         NodeValue::BlockQuote => {
             for child in node.children() {
-                render_node(&child, th, lines, wrap, ascii);
+                render_node(&child, th, lines, wrap, table_hi, ascii);
             }
         }
         NodeValue::List(_list) => {
             for child in node.children() {
-                render_node(&child, th, lines, wrap, ascii);
+                render_node(&child, th, lines, wrap, table_hi, ascii);
             }
             lines.push(Line::from(""));
         }
@@ -666,7 +670,7 @@ fn render_node(
             let body = highlight_desc_term(body, th);
 
             let prefix = "  - ";
-            let lw = if wrap < 40 { 78 } else { wrap };
+            let lw = wrap;
             let content_width = lw.saturating_sub(prefix.len()).max(1);
             let wrapped = wrap_spans(&body, content_width);
             for (i, line_spans) in wrapped.into_iter().enumerate() {
@@ -699,7 +703,7 @@ fn render_node(
                 highlight_desc_term(body, th)
             };
 
-            let lw = if wrap < 40 { 78 } else { wrap };
+            let lw = wrap;
             let content_width = lw.saturating_sub(prefix.len()).max(1);
             let wrapped = wrap_spans(&body, content_width);
             for (i, line_spans) in wrapped.into_iter().enumerate() {
@@ -723,7 +727,7 @@ fn render_node(
             lines.push(Line::from(""));
         }
         NodeValue::Table(_) => {
-            render_table(node, lines, ascii);
+            render_table(node, lines, ascii, table_hi);
             lines.push(Line::from(""));
         }
         NodeValue::ThematicBreak => {
@@ -737,7 +741,7 @@ fn render_node(
         }
         _ => {
             for child in node.children() {
-                render_node(&child, th, lines, wrap, ascii);
+                render_node(&child, th, lines, wrap, table_hi, ascii);
             }
         }
     }
@@ -760,16 +764,18 @@ fn render_node(
 pub fn render_markdown(
     th: &MarkdownTheme,
     text: &str,
-    wrap: usize,
+    width: usize,
     ascii: bool,
 ) -> Vec<Line<'static>> {
+    let prose_w = width.clamp(40, 120);
+    let table_hi = width.clamp(60, 160);
     let body = strip_frontmatter(text);
     let arena = Arena::new();
     let opts = comrak_options();
     let root = parse_document(&arena, body, &opts);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    render_node(&root, th, &mut lines, wrap, ascii);
+    render_node(&root, th, &mut lines, prose_w, table_hi, ascii);
     lines
 }
 #[cfg(test)]
@@ -1135,6 +1141,80 @@ mod tests {
         assert!(
             table_text.contains("A much") || table_text.contains("longer"),
             "Table should contain header text"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Width policy tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn width_policy_table_max_respects_cap() {
+        use unicode_width::UnicodeWidthStr;
+        // A table wide enough to exceed the 160 cap.
+        let md = "| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb | cccccccccccccccccccccccccccccccc | dddddddddddddddddddddddddddddddd |\n|---|---|---|---|\n| x | y | z | w |\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 200, false);
+        let max_w = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    .width()
+            })
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_w <= 160,
+            "table at width 200 must respect 160 cap, got {max_w}"
+        );
+    }
+
+    #[test]
+    fn width_policy_prose_clamps_high() {
+        use unicode_width::UnicodeWidthStr;
+        let md = "this is a long paragraph that should wrap according to the clamped prose width policy and not exceed one hundred twenty columns even when a huge width is requested\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 200, false);
+        let max_w = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    .width()
+            })
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_w <= 120,
+            "prose at width 200 must clamp to 120, got {max_w}"
+        );
+    }
+
+    #[test]
+    fn width_policy_prose_clamps_low() {
+        use unicode_width::UnicodeWidthStr;
+        let md = "this is a long paragraph that should wrap at forty columns rather than the legacy seventy eight when a tiny width is requested by the caller\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 30, false);
+        let max_w = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    .width()
+            })
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_w >= 35 && max_w <= 40,
+            "prose at width 30 must clamp to 40 (not 30 or 78), got {max_w}"
         );
     }
 

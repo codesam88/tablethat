@@ -52,16 +52,15 @@ const CASES: &[(&str, &str, usize, &[&str])] = &[
         "paragraph wraps at spaces",
         "one two three four five\n",
         15,
-        // NOTE: wrapped lines keep a trailing space (wrap_spans wart, pinned
-        // faithfully — do not "fix" the expectation without fixing the renderer).
-        &["one two three ", "four five", ""],
+        // Policy clamps prose width to 40 minimum, so the whole line fits.
+        &["one two three four five", ""],
     ),
     (
         "bracket group stays together",
         "x ([word]) y\n",
         8,
-        // NOTE: same trailing-space wart as above ("x ").
-        &["x ", "([word])", "y", ""],
+        // Policy clamps prose width to 40 minimum, so the whole line fits.
+        &["x ([word]) y", ""],
     ),
     (
         // The pipeline flattens links to their text (URL dropped); the
@@ -70,7 +69,8 @@ const CASES: &[(&str, &str, usize, &[&str])] = &[
         "link text flattened, url dropped",
         "text before [link text](http://example.com) and more\n",
         25,
-        &["text before link text and", "more", ""],
+        // Policy clamps prose width to 40 minimum, so the whole line fits.
+        &["text before link text and more", ""],
     ),
     (
         "list wraps with hanging indent",

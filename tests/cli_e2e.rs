@@ -537,8 +537,8 @@ fn gloss_filter_respects_width_for_prose() {
     let text = String::from_utf8(out.stdout).expect("utf8");
     for line in text.lines() {
         assert!(
-            line.trim_end().len() <= 20,
-            "wrapped line exceeds width: {line:?}"
+            line.trim_end().len() <= 40,
+            "wrapped line exceeds clamped width: {line:?}"
         );
     }
 }
