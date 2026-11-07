@@ -99,6 +99,18 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
             .unwrap_or(false)
     }
 
+    // Helper: trailing punctuation that glues to the preceding word.
+    // A line must never start with one of these (orphan prevention);
+    // the `](` link seam below is the deliberate exception (it may break
+    // for human readers) and is unaffected: seam words always contain
+    // non-punctuation, so the hold rule never fires on them.
+    fn is_trailing_punct(ch: char) -> bool {
+        matches!(
+            ch,
+            ',' | ';' | ':' | '!' | '?' | '.' | '%' | ')' | ']' | '}' | '>' | '…'
+        )
+    }
+
     // Helper: append a character to pending, merging with last piece if same style
     fn push_char(pending: &mut Vec<(String, Style)>, ch: char, style: Style) {
         if let Some(last) = pending.last_mut()
@@ -111,12 +123,41 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
         pending.push((ch.to_string(), style));
     }
 
-    for span in spans {
-        let text = span.content.as_ref();
-        let style = span.style;
+    // Flatten spans so lookahead can cross span boundaries (search
+    // highlighting splits words mid-word; the orphan rule must still see
+    // the upcoming word). Per-char style is preserved.
+    let flat: Vec<(char, Style)> = spans
+        .iter()
+        .flat_map(|s| {
+            let style = s.style;
+            s.content.chars().map(move |c| (c, style))
+        })
+        .collect();
 
-        for ch in text.chars() {
-            if ch == ' ' {
+    let mut idx = 0usize;
+    while idx < flat.len() {
+        let (ch, style) = flat[idx];
+
+        if ch == ' ' {
+            // Orphan prevention, mirror of the opening-bracket hold below:
+            // if the upcoming word consists entirely of trailing
+            // punctuation, hold the space (and the word before it) so the
+            // punctuation flushes as one unit with its word instead of
+            // starting the next line. Requires pending to be non-empty:
+            // after a committed group (e.g. ") ;") there is nothing to
+            // glue to without reflow, so old behavior is kept there.
+            let mut j = idx + 1;
+            while j < flat.len() && flat[j].0 != ' ' {
+                j += 1;
+            }
+            let upcoming_all_punct =
+                j > idx + 1 && flat[idx + 1..j].iter().all(|(c, _)| is_trailing_punct(*c));
+            if upcoming_all_punct && !pending.is_empty() && !pending_ends_with_open(&pending) {
+                push_char(&mut pending, ' ', style);
+                idx += 1;
+                continue;
+            }
+            {
                 // Space is always a break point
                 // First, commit any pending that shouldn't be held back
                 let pends_with_open = pending_ends_with_open(&pending);
@@ -139,16 +180,39 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
                     cur.push((" ".to_string(), style));
                     line_len += 1;
                 }
-            } else if ch == ']' && bracket_depth > 0 {
-                // Closing bracket while inside brackets - part of the group
-                push_char(&mut pending, ch, style);
-                bracket_depth -= 1;
-            } else if ch == ']' {
-                // Standalone ']' - could be start of '](' link syntax
-                push_char(&mut pending, ch, style);
-            } else if ch == '(' && pending.last().is_some_and(|last| last.0.ends_with(']')) {
-                // '(' immediately after ']' - this is '](' link syntax
-                // Commit pending up to and including ']', then start new group with '('
+            }
+        } else if ch == ']' && bracket_depth > 0 {
+            // Closing bracket while inside brackets - part of the group
+            push_char(&mut pending, ch, style);
+            bracket_depth -= 1;
+        } else if ch == ']' {
+            // Standalone ']' - could be start of '](' link syntax
+            push_char(&mut pending, ch, style);
+        } else if ch == '(' && pending.last().is_some_and(|last| last.0.ends_with(']')) {
+            // '(' immediately after ']' - this is '](' link syntax
+            // Commit pending up to and including ']', then start new group with '('
+            let plen = pending_len(&pending);
+            if line_len + plen > max && !cur.is_empty() {
+                out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
+                line_len = 0;
+            }
+            for piece in pending.drain(..) {
+                line_len += piece.0.len();
+                cur.push(piece);
+            }
+            // '(' starts the URL part - new bracket group
+            pending.push(("(".to_string(), style));
+            bracket_depth += 1;
+        } else if ch == '(' || ch == '[' {
+            // Opening bracket - increase depth, add to pending
+            push_char(&mut pending, ch, style);
+            bracket_depth += 1;
+        } else if ch == ')' && bracket_depth > 0 {
+            // Closing bracket inside group
+            push_char(&mut pending, ch, style);
+            bracket_depth -= 1;
+            // If we just closed the outermost bracket, check if we should commit
+            if bracket_depth == 0 {
                 let plen = pending_len(&pending);
                 if line_len + plen > max && !cur.is_empty() {
                     out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
@@ -158,34 +222,12 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
                     line_len += piece.0.len();
                     cur.push(piece);
                 }
-                // '(' starts the URL part - new bracket group
-                pending.push(("(".to_string(), style));
-                bracket_depth += 1;
-            } else if ch == '(' || ch == '[' {
-                // Opening bracket - increase depth, add to pending
-                push_char(&mut pending, ch, style);
-                bracket_depth += 1;
-            } else if ch == ')' && bracket_depth > 0 {
-                // Closing bracket inside group
-                push_char(&mut pending, ch, style);
-                bracket_depth -= 1;
-                // If we just closed the outermost bracket, check if we should commit
-                if bracket_depth == 0 {
-                    let plen = pending_len(&pending);
-                    if line_len + plen > max && !cur.is_empty() {
-                        out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
-                        line_len = 0;
-                    }
-                    for piece in pending.drain(..) {
-                        line_len += piece.0.len();
-                        cur.push(piece);
-                    }
-                }
-            } else {
-                // Regular character
-                push_char(&mut pending, ch, style);
             }
+        } else {
+            // Regular character
+            push_char(&mut pending, ch, style);
         }
+        idx += 1;
     }
 
     // Flush any remaining pending
@@ -527,22 +569,12 @@ fn render_table(
 
     struct ColW {
         min: usize,
-        p60: usize,
-        p80: usize,
-        p100: usize,
         natural: usize,
     }
     let mut cols: Vec<ColW> = Vec::new();
     for _ in 0..ncols {
-        cols.push(ColW {
-            min: 0,
-            p60: 0,
-            p80: 0,
-            p100: 0,
-            natural: 0,
-        });
+        cols.push(ColW { min: 0, natural: 0 });
     }
-    let mut all_lens: Vec<Vec<usize>> = vec![Vec::new(); ncols];
 
     for row in &tbl {
         for (i, cell) in row.iter().enumerate() {
@@ -552,113 +584,47 @@ fn render_table(
                 .max()
                 .unwrap_or(display_width(cell));
             cols[i].min = cols[i].min.max(lw.min(40));
-            all_lens[i].push(display_width(cell));
+            // Uncapped max cell display width (natural content width).
+            let cw = display_width(cell);
+            if cw > cols[i].natural {
+                cols[i].natural = cw;
+            }
         }
-    }
-
-    for i in 0..ncols {
-        let mut s = all_lens[i].clone();
-        s.sort_unstable();
-        let min = cols[i].min;
-        let n = s.len();
-        let idx60 = ((n as f64 * 0.6).ceil() as usize).saturating_sub(1);
-        let idx80 = ((n as f64 * 0.8).ceil() as usize).saturating_sub(1);
-        let last = n.saturating_sub(1);
-        let cap = |v: usize| v.max(min).min(40);
-        cols[i].p60 = cap(s.get(idx60).copied().unwrap_or(4));
-        cols[i].p80 = cap(s.get(idx80).copied().unwrap_or(4)).max(cols[i].p60);
-        cols[i].p100 = cap(s.get(last).copied().unwrap_or(4)).max(cols[i].p80);
-        // Uncapped max cell display width (for proportional fill).
-        cols[i].natural = s.last().copied().unwrap_or(0);
     }
 
     let border_w = ncols * 2 + 1;
     let target = table_hi.saturating_sub(border_w);
 
-    let mut col_w: Vec<usize> = cols.iter().map(|c| c.p60).collect();
-    let used: usize = col_w.iter().sum();
+    // Natural-start: size to content, never stretch.
+    let mut col_w: Vec<usize> = cols.iter().map(|c| c.natural.max(c.min).max(1)).collect();
 
-    if used > target {
-        let deficit = used - target;
+    // Shrink-only: if content overflows the budget, shrink columns proportionally
+    // down to their minima. Never grow, never fill slack.
+    // Each round either fits the budget or pins at least one column at its min,
+    // so at most `ncols` rounds terminate (flex excludes pinned columns).
+    for _ in 0..ncols {
+        if col_w.iter().sum::<usize>() <= target {
+            break;
+        }
+        let deficit = col_w.iter().sum::<usize>().saturating_sub(target);
         let flex: usize = col_w
             .iter()
             .zip(&cols)
             .map(|(&w, c)| w.saturating_sub(c.min))
             .sum();
+        if flex == 0 {
+            // All columns at min: mins win; table may overflow budget (accepted).
+            break;
+        }
         col_w = col_w
             .iter()
             .enumerate()
             .map(|(i, &w)| {
                 let room = w.saturating_sub(cols[i].min);
-                w.saturating_sub(if flex > 0 {
-                    deficit * room / flex.max(1)
-                } else {
-                    0
-                })
-                .max(cols[i].min)
+                w.saturating_sub(deficit * room / flex.max(1))
+                    .max(cols[i].min)
             })
             .collect();
-    }
-
-    for &level in &[1, 2] {
-        if col_w.iter().sum::<usize>() >= target {
-            break;
-        }
-        let mut order: Vec<usize> = (0..ncols).collect();
-        let gain = |i: usize| -> usize {
-            let target_w = if level == 1 {
-                cols[i].p80
-            } else {
-                cols[i].p100
-            };
-            target_w.saturating_sub(col_w[i])
-        };
-        order.sort_by_key(|&b| std::cmp::Reverse(gain(b)));
-        for &i in &order {
-            let target_w = if level == 1 {
-                cols[i].p80
-            } else {
-                cols[i].p100
-            };
-            let add = target_w.saturating_sub(col_w[i]);
-            if add == 0 {
-                continue;
-            }
-            let room = target - col_w.iter().sum::<usize>();
-            let take = add.min(room);
-            col_w[i] += take;
-            if col_w.iter().sum::<usize>() >= target {
-                break;
-            }
-        }
-    }
-
-    let slack = target.saturating_sub(col_w.iter().sum());
-    if slack > 0 {
-        // Proportional fill: distribute slack by headroom (natural - col_w).
-        let mut weights: Vec<usize> = (0..ncols)
-            .map(|i| cols[i].natural.saturating_sub(col_w[i]))
-            .collect();
-        if weights.iter().all(|&w| w == 0) {
-            weights = (0..ncols).map(|i| cols[i].natural).collect();
-        }
-        if weights.iter().sum::<usize>() == 0 {
-            weights = vec![1usize; ncols];
-        }
-        let total_w: usize = weights.iter().sum();
-        let mut shares: Vec<usize> = (0..ncols)
-            .map(|i| slack * weights[i] / total_w.max(1))
-            .collect();
-        let allocated: usize = shares.iter().sum();
-        let remainder = slack.saturating_sub(allocated);
-        if remainder > 0
-            && let Some(max_i) = (0..ncols).max_by_key(|&i| col_w[i])
-        {
-            shares[max_i] += remainder;
-        }
-        for i in 0..ncols {
-            col_w[i] += shares[i];
-        }
     }
 
     // Collect non-empty rows (skip empties, as before).
@@ -1066,6 +1032,63 @@ mod tests {
     }
 
     #[test]
+    fn wrap_semicolon_sticks_to_word() {
+        let spans = vec![Span::styled("aaa ; bbb ccc", Style::default())];
+        let wrapped = wrap_spans(&spans, 4);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        for line in &lines {
+            assert!(
+                !line.trim_start().starts_with(';'),
+                "orphan ';' must not start a line, got: {line:?} in {lines:?}"
+            );
+        }
+        assert!(
+            lines.iter().any(|l| l.ends_with(';')),
+            "';' must stay glued to its word: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_trailing_punctuation_sticks_to_word() {
+        // Same orphan rule for the rest of the trailing set (,:!?.)%(])}>
+        // plus ellipsis; each would otherwise strand at a line start.
+        for punct in [",", ":", "!", "?", ".", "%", ")", "]", "}", ">", "…", "..."] {
+            let text: &'static str = Box::leak(format!("aaa {punct} bbb ccc").into_boxed_str());
+            let spans = vec![Span::styled(text, Style::default())];
+            let wrapped = wrap_spans(&spans, 4);
+            let lines: Vec<String> = wrapped
+                .iter()
+                .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+                .collect();
+            for line in &lines {
+                assert!(
+                    !line.trim_start().starts_with(punct),
+                    "orphan {punct:?} must not start a line, got: {line:?} in {lines:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wrap_balanced_query_stays_whole() {
+        // ?hello? has no internal spaces, so it is one atom and must never
+        // split; the trailing rule additionally glues a spaced " ?".
+        let spans = vec![Span::styled("say ?hello? loudly now", Style::default())];
+        let wrapped = wrap_spans(&spans, 10);
+        let lines: Vec<String> = wrapped
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            lines.iter().any(|l| l.contains("?hello?")),
+            "?hello? must stay whole: {lines:?}"
+        );
+    }
+
+    #[test]
     fn wrap_breaks_at_link_boundary() {
         // The '](' sequence is a valid break point
         // ']' stays with preceding text, '(' stays with following text
@@ -1450,8 +1473,9 @@ mod tests {
 
     #[test]
     fn table_narrow_fits_budget_unchanged() {
-        // Contract superseded by fill-to-budget: a narrow table now fills the
-        // full width budget (80) instead of sitting at content width.
+        // Compact contract: a narrow table sizes to its natural content
+        // width instead of stretching. Naturals [4, 4], overhead 2*2+1=5,
+        // so every table line is exactly 4+4+5 = 13 columns.
         let md = "| Name | Role |
 |---|---|
 | Ada | Eng |
@@ -1476,7 +1500,7 @@ mod tests {
             .map(|l| l.width())
             .collect();
         for w in &table_widths {
-            assert_eq!(*w, 80, "narrow table must fill budget");
+            assert_eq!(*w, 13, "narrow table must stay compact");
         }
         assert!(strs.iter().any(|l| l.contains("Name")));
         assert!(strs.iter().any(|l| l.contains("Ada")));
@@ -1484,7 +1508,8 @@ mod tests {
 
     #[test]
     fn table_fills_budget() {
-        let md = "| a | b | c |\n|---|---|---|\n| 1 | 2 | 3 |\n";
+        // Over-budget tables still fill the width exactly (shrink-to-fit).
+        let md = "| Name | Description |\n|---|---|\n| Ada | Engineer who loves tables and writes very long descriptions about everything |\n| Bob | Designer |\n";
         let th = theme_from_cfg(&crate::ThemeConfig::default());
         let lines = render_markdown(&th, md, 80, false);
         let strs: Vec<String> = lines
@@ -1511,52 +1536,6 @@ mod tests {
                 l
             );
         }
-    }
-
-    #[test]
-    fn table_surplus_proportional() {
-        let md =
-            "| tenchars!! | this is a medium length column text here |\n|---|---|\n| x | y |\n";
-        let th = theme_from_cfg(&crate::ThemeConfig::default());
-        let lines = render_markdown(&th, md, 80, false);
-        let strs: Vec<String> = lines
-            .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
-            .collect();
-        eprintln!("prop: {:#?}", strs);
-
-        // Extract column widths from the top border.
-        fn col_widths(border: &str) -> Vec<usize> {
-            let s = border.trim();
-            // strip first and last corner
-            let inner = s
-                .trim_start_matches(|c| c == '┌' || c == '+')
-                .trim_end_matches(|c| c == '┐' || c == '+');
-            // split by mid corners
-            inner
-                .split(|c| c == '┬' || c == '+')
-                .map(|seg| seg.chars().count().saturating_sub(1))
-                .collect()
-        }
-        let border = strs
-            .iter()
-            .find(|l| l.contains('┌') || l.contains('+'))
-            .expect("top border");
-        let finals = col_widths(border);
-        assert_eq!(finals.len(), 2);
-
-        // Naturals: uncapped max cell display width per column.
-        let naturals = [10usize, 40usize];
-        // gain = final - natural (approximates fill gain)
-        let gain0 = finals[0] as isize - naturals[0] as isize;
-        let gain1 = finals[1] as isize - naturals[1] as isize;
-        assert!(
-            gain1 >= gain0,
-            "wider column gain {} must be >= narrower gain {}: finals={:?}",
-            gain1,
-            gain0,
-            finals
-        );
     }
 
     // -------------------------------------------------------------------------
