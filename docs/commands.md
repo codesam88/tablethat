@@ -7,6 +7,15 @@ Linked from `README.md` and `AGENTS.md`.
 
 Global flags: `--config PATH`, `--root PATH` (`-r`), `--show-done`.
 
+`--root` sets the workspace root: where `.plan/` (task files, schema)
+is discovered — for every subcommand (default: auto-detect the nearest
+`.plan/` ancestor). `[PATH]` only selects what `lint`/`format` operate on, with
+foreign semantics (all-`.md` enumeration, adjacent-only schema search). The
+two compose: `plan -r <repo> format foreign/file.md` uses the repo's config
+while targeting a foreign file. Note `plan format -r <dir>` with no path
+still assumes a task tree (`<dir>/.plan`) and errors if absent — pass the
+directory as `[PATH]` to format foreign files.
+
 Subcommands (abbreviate to first letter, e.g. `plan b`):
 
 | Command | Alias | Description |
@@ -19,8 +28,8 @@ Subcommands (abbreviate to first letter, e.g. `plan b`):
 | `add <slug>` | `a` | Create a task |
 | `open <slug>` | `o` | Open a task in `$EDITOR` |
 | `delete <slug>` | `d` | Delete a task |
-| `lint` | — | Validate task frontmatter |
-| `format [PATH]` | — | Format task markdown (file or dir) |
+| `lint [PATH]` | — | Validate frontmatter (schema optional for foreign paths) |
+| `format [PATH]` | — | Format markdown (file or dir) |
 
 Filters (kanban/browse/list): `-s/--status`, `-t/--type`, `-p/--priority`,
 `-a/--area`, `-q` search. Sort: `-S/--sort FIELD` (repeatable).
@@ -28,11 +37,42 @@ Filters (kanban/browse/list): `-s/--status`, `-t/--type`, `-p/--priority`,
 `add` options: `-s/--status` (default `open`), `-t/--type` (default
 `feature`), `-p/--priority` (default `medium`), `--area` (default `""`).
 
+`lint [PATH]`: validate frontmatter. With no `PATH`, validate every task in
+the workspace's `.plan/` tree; a schema is required and its absence is a hard
+error: `plan: error: no schema found (searched .plan/.schema.json, config
+dir, data dir)` (exit 1). With a `PATH`:
+- directory: lint all `.md` files in it;
+- file: must be `.md`, lint that file.
+Schema is searched only in adjacent locations: `<dir>/.schema.json`,
+`<dir>/.plan/.schema.json`, or (for a file) its parent directory. If none is
+found, lint prints `warning: no schema found (searched ...)` to stderr and
+continues with schema-independent checks only (frontmatter delimiter present,
+YAML parses, frontmatter is a mapping); required/enum/unknown-key checks are
+skipped. Exit 0 when no `FAIL` diagnostics remain; exit 1 otherwise, with each
+failure on stderr as `<path>: FAIL — ...`. Files with no frontmatter are
+skipped silently in schemaless mode; in schema mode they are validated as
+before.
+
 `format [PATH]`: with a file, format that file; with a directory, format all
 `.md` files in it; with no path, normalize every task in the workspace.
-`--width`/`-w COLS` overrides `format.width` (default 72) for this run.
-`--reflow`/`--no-reflow` overrides `format.reflow` (default true) for this run.
-`--check` dry-runs: report files that would change without writing, non-zero exit when dirty.
+- Task path (files under `<root>/.plan/`, or the no-path whole tree): applies
+  canonical field ordering (`status`/`type`/`priority`/`area` first) and
+  re-emits multi-line values in block style. A split failure (unclosed `---`)
+  is a hard error: `<path>: cannot normalize — ...` (exit 1).
+- General path (all other explicit paths): frontmatter is preserved
+  byte-verbatim (key order, comments, and block-scalar styles untouched) and
+  only the body is formatted.
+- Invalid, unparseable, or non-mapping frontmatter: skipped with
+  `<path>: WARNING — invalid frontmatter, skipped` on stderr; the file is
+  left byte-untouched and reports `Ok(false)` (it never counts as
+  "would format" under `--check`). In the general path an unclosed `---`
+  delimiter is skipped the same way.
+`--check` dry-runs: directory runs print `would format <path>` per file and
+exit 1 with `N file(s) would be reformatted` if any would change; single-file
+runs print `<path>: would be reformatted`. Skipped files do not affect the
+exit code. `--width`/`-w COLS` overrides `format.width` (default 72) for this
+run. `--reflow`/`--no-reflow` overrides `format.reflow` (default true) for
+this run.
 
 ## `gloss`
 
