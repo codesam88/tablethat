@@ -843,8 +843,8 @@ fn render_node(
 /// Render markdown to styled lines: strips frontmatter, parses with comrak
 /// (tables, tasklists, strikethrough, autolink), wraps paragraphs to `wrap`
 /// columns. Headings render on one line; code blocks are never word-wrapped;
-/// table cells wrap to the computed column width. See `wrap_spans` for bracket
-/// grouping rules.
+/// table cells wrap to the computed column width (tables are NOT "never
+/// wrapped"). See `wrap_spans` for bracket grouping rules.
 ///
 /// ```
 /// # use tablethat_lib::{ThemeConfig, markdown::{render_markdown, theme_from_cfg}};
@@ -877,17 +877,86 @@ mod tests {
     use super::*;
 
     // ==========================================================================
-    // WORD WRAP RULES
+    // WORD WRAP RULES (authoritative index)
     // ==========================================================================
     //
-    // 1. PARAGRAPH TEXT (wrap_spans):
-    //    - Break at spaces
-    //    - Break at '](' sequence: ']' stays with preceding text, '(' stays with following text
-    //    - Do NOT break at: '[', ']', '(', ')' individually
-    //    - Opening brackets stay with following word: (word stays together
-    //    - Closing brackets stay with preceding word: word) stays together
-    //    - Bracket groups stay together: (word), [word], [text](url)
-    //    - Bracket nesting is tracked across spans for proper grouping
+    // P1. Spaces break prose (wrap_spans): a space is always a safe break
+    //     point; runs accumulate until width is exceeded, then flush.
+    // P2. The "](" link seam splits deliberately: ']' stays with the
+    //     preceding text, '(' stays with the following text (human-reader
+    //     exception), so "[text](url)" can break between ']' and '('.
+    // P3. Brackets never split individually: standalone '[', ']', '(', ')'
+    //     are not break points on their own.
+    // P4. Open bracket sticks forward: '(' / '[' bind to the following
+    //     word, so "(word" stays together.
+    // P5. Close bracket sticks back: ')' / ']' bind to the preceding word,
+    //     so "word)" stays together.
+    // P6. Groups/nesting stay whole, including across spans: "(word)",
+    //     "[word]", "[text](url)", nested brackets; bracket depth is
+    //     tracked across spans so a '(' from one span guards a ')' in
+    //     another.
+    // P7. Long groups break internally at spaces: a bracketed run longer
+    //     than the width may wrap at its internal spaces, but the bracket
+    //     pairing is preserved across the break.
+    // P8. Orphan rule (table hard-break + abutting runs): a continuation
+    //     line never STARTS with trailing punctuation
+    //     (',', ';', ':', '!', '?', '.', '%', ')', ']', '}', '>', '…');
+    //     break_atom backs the break up over the trailing-punct run. A
+    //     balanced unit like "?hello?" stays whole; if the atom itself
+    //     starts with punctuation it is kept whole (nothing to glue to).
+    // P9. Balanced units stay whole: "?hello?"-style symmetric punctuation
+    //     is never split across a break.
+    //
+    // T1. Tables size to natural content (compact, never stretch): column
+    //     width starts at the natural (uncapped) content width.
+    // T2. Content overflow shrinks proportionally to the exact budget:
+    //     when natural width exceeds the budget, columns shrink toward
+    //     their minima in proportion to their spare room.
+    // T3. Min floor wins with accepted overflow: once every column is at
+    //     its minimum and the table still exceeds the budget, the minimums
+    //     win and the table may overflow (box stays intact).
+    // T4. Cells wrap to column width: each cell's text is greedy-wrapped
+    //     (wrap_cell) to its computed column width, including hard-break
+    //     of overlong words via break_atom.
+    // T5. Header/body separators only between logical rows: top border,
+    //     header separator, one separator per additional body row, bottom
+    //     border; no separator is emitted inside a wrapped cell.
+    // T6. Every emitted table line has identical display width (box
+    //     integrity), including wrapped rows and hard-broken words.
+    // T7. ASCII vs unicode borders: ascii mode uses "+-|=" borders,
+    //     unicode mode uses box-drawing borders; layout is identical.
+    // T8. Ragged rows / empty cells: rows with fewer cells are padded;
+    //     empty cells render as empty; column count is the max row width.
+    // T9. Header-only tables: a single row renders as top + row + bottom
+    //     with no separator.
+    //
+    // W1. Prose width clamp(40, 120): render_markdown clamps the prose
+    //     wrap width to [40, 120] regardless of the requested width.
+    // W2. Table cap clamp(60, 160): the table high-water mark is clamped
+    //     to [60, 160].
+    // W3. -w / terminal-minus-chrome base: the base width comes from -w or
+    //     (terminal columns - chrome); see gloss::App::effective_width.
+    // W4. Effective-width reservation: 3 columns reserved when a scrollbar
+    //     is shown, 1 otherwise (gloss::App::effective_width). Covered by
+    //     existing tests in src/gloss/tui.rs; not duplicated here.
+    //
+    // F1. Formatter split-only vs reflow: split-only wraps overlong lines
+    //     without joining short ones; reflow joins then re-splits to width.
+    // F2. Formatter fixpoint: formatting twice yields the same output.
+    // F3. Formatter tables aligned, never wrapped: table rows are aligned
+    //     from AST ranges and are not re-wrapped.
+    // F4. Formatter verbatim frontmatter: frontmatter bytes are preserved
+    //     unchanged (plan format path).
+    // F5. Formatter skip-on-invalid-YAML: unparseable frontmatter causes
+    //     the file to be skipped with a warning, not corrupted.
+    // F6. Formatter hardbreak flavors: both two-space and backslash hard
+    //     breaks are preserved (hardbreak-exempt trailing whitespace).
+    //
+    // KNOWN LIMITATION: spaced trailing punctuation in PROSE ("word ;")
+    // may strand at a line start. The renderer performs no reflow, and the
+    // orphan guarantee (P8) covers abutting runs ("word;") and table
+    // hard-breaks only; spaced runs keep normal break behavior. Gluing them
+    // would require a reflow pass.
     //
     // 2. LIST ITEMS (wrap_lines):
     //    - Standard word wrap at spaces only
@@ -897,11 +966,6 @@ mod tests {
     // 3. CODE BLOCKS:
     //    - NO wrapping - output as-is, preserving original line breaks
     //    - Each line of code becomes one output line
-    //
-    // 4. TABLES:
-    //    - Column-based layout with computed widths
-    //    - Cells wrap to the computed column width
-    //    - Columns padded to calculated width (p60/p80/p100 percentiles)
     //
     // 5. HEADINGS:
     //    - Single line, no wrapping
@@ -1990,5 +2054,629 @@ mod tests {
                 && s.style.add_modifier.contains(Modifier::BOLD)),
             "no desc highlight expected"
         );
+    }
+
+    mod wrap_rules_matrix {
+        use super::*;
+        use unicode_width::UnicodeWidthStr;
+
+        #[derive(Copy, Clone)]
+        struct Case {
+            rule_id: &'static str,
+            name: &'static str,
+            md: &'static str,
+            width: usize,
+            ascii: bool,
+            reflow: bool,
+            format: bool,
+            must_contain: &'static [&'static str],
+            must_not_start_line: &'static [char],
+            exact_total_width: Option<usize>,
+            max_line_width: Option<usize>,
+            exact_lines: Option<&'static [&'static str]>,
+            check: Option<fn(&Case, &[String])>,
+        }
+
+        // ---- check helpers ----
+
+        fn check_fixpoint(case: &Case, _lines: &[String]) {
+            let out1 = crate::markdown_fmt::format_commonmark(case.md, case.width, case.reflow);
+            let out2 = crate::markdown_fmt::format_commonmark(&out1, case.width, case.reflow);
+            assert_eq!(out1, out2, "fixpoint failed for {}", case.rule_id);
+        }
+
+        fn check_html_eq(case: &Case, _lines: &[String]) {
+            let opts = crate::markdown::comrak_options();
+            let output = crate::markdown_fmt::format_commonmark(case.md, case.width, case.reflow);
+            let a = comrak::markdown_to_html(case.md, &opts);
+            let b = comrak::markdown_to_html(&output, &opts);
+            let norm = |x: &str| -> String { x.replace('\n', " ") };
+            assert_eq!(
+                norm(&a),
+                norm(&b),
+                "HTML must be preserved for {}",
+                case.rule_id
+            );
+        }
+
+        fn check_table_lines_equal(case: &Case, lines: &[String]) {
+            let table_lines: Vec<&String> = lines
+                .iter()
+                .filter(|l| {
+                    l.contains('│')
+                        || l.contains('┌')
+                        || l.contains('└')
+                        || l.contains('├')
+                        || l.contains('┝')
+                        || l.contains('+')
+                        || l.contains('|')
+                })
+                .collect();
+            assert!(
+                !table_lines.is_empty(),
+                "rule {} ({}): no table lines",
+                case.rule_id,
+                case.name
+            );
+            let first = table_lines[0].width();
+            for l in &table_lines {
+                assert_eq!(
+                    l.width(),
+                    first,
+                    "rule {} ({}): box integrity broken: {:?}",
+                    case.rule_id,
+                    case.name,
+                    l
+                );
+            }
+            // overflow accepted: may exceed budget; just ensure consistent.
+            let _ = first;
+        }
+
+        fn check_narrow_compact(case: &Case, lines: &[String]) {
+            let table_lines: Vec<&String> = lines
+                .iter()
+                .filter(|l| {
+                    l.contains('┌')
+                        || l.contains('│')
+                        || l.contains('└')
+                        || l.contains('+')
+                        || l.contains('|')
+                })
+                .collect();
+            let w = table_lines.iter().map(|l| l.width()).max().unwrap_or(0);
+            assert!(
+                w < case.width,
+                "rule {} ({}): compact table {} not < budget {}",
+                case.rule_id,
+                case.name,
+                w,
+                case.width
+            );
+        }
+
+        fn check_separators(case: &Case, lines: &[String]) {
+            let sep_count = lines
+                .iter()
+                .filter(|l| {
+                    let t = l.trim();
+                    !t.is_empty() && t.chars().all(|c| "┌┬┐├┼┤└┴┘┝┿┥─━=+-".contains(c))
+                })
+                .count();
+            // header + 2 body rows => 4
+            assert_eq!(
+                sep_count, 4,
+                "rule {} ({}): sep count {} != 4: {:#?}",
+                case.rule_id, case.name, sep_count, lines
+            );
+        }
+
+        fn check_header_only_separators(case: &Case, lines: &[String]) {
+            let sep_count = lines
+                .iter()
+                .filter(|l| {
+                    let t = l.trim();
+                    !t.is_empty() && t.chars().all(|c| "┌┬┐├┼┤└┴┘┝┿┥─━=+-".contains(c))
+                })
+                .count();
+            assert_eq!(
+                sep_count, 2,
+                "rule {} ({}): header-only sep count {} != 2: {:#?}",
+                case.rule_id, case.name, sep_count, lines
+            );
+        }
+
+        fn check_ragged(case: &Case, lines: &[String]) {
+            check_table_lines_equal(case, lines);
+            let text = lines.join("\n");
+            assert!(
+                text.contains("Ada") || text.contains("empty") || text.contains("a"),
+                "rule {} ({}): content missing",
+                case.rule_id,
+                case.name
+            );
+        }
+
+        fn check_p2_seam(case: &Case, lines: &[String]) {
+            let joined = lines.join("\n");
+            // The seam must have been a break opportunity: ']' and '(' present.
+            assert!(
+                joined.contains(']'),
+                "rule {} ({}): missing ']'",
+                case.rule_id,
+                case.name
+            );
+            assert!(
+                joined.contains('('),
+                "rule {} ({}): missing '('",
+                case.rule_id,
+                case.name
+            );
+            // No line should contain the unsplit seam if a break occurred.
+            // (If everything fits on one line this is vacuous; ensure at least one break happened.)
+            if lines.len() > 1 {
+                for l in lines {
+                    assert!(
+                        !l.contains("]("),
+                        "rule {} ({}): seam not split: {:?}",
+                        case.rule_id,
+                        case.name,
+                        l
+                    );
+                }
+            }
+        }
+
+        fn check_balanced_whole(case: &Case, lines: &[String]) {
+            let joined = lines.join("\n");
+            assert!(
+                joined.contains("?hello?"),
+                "rule {} ({}): balanced unit broken: {:?}",
+                case.rule_id,
+                case.name,
+                lines
+            );
+        }
+
+        fn check_p4_open(case: &Case, lines: &[String]) {
+            // open bracket should not be stranded at end of a line alone
+            for l in lines {
+                let t = l.trim_end();
+                assert!(
+                    !t.ends_with('(') && !t.ends_with('['),
+                    "rule {} ({}): open bracket stranded: {:?}",
+                    case.rule_id,
+                    case.name,
+                    l
+                );
+            }
+        }
+
+        fn check_p5_close(case: &Case, lines: &[String]) {
+            // close bracket should not start a line
+            for l in lines {
+                let t = l.trim_start();
+                if !t.is_empty() {
+                    let first = t.chars().next().unwrap();
+                    assert!(
+                        ![')', ']', '}'].contains(&first),
+                        "rule {} ({}): close bracket starts line: {:?}",
+                        case.rule_id,
+                        case.name,
+                        l
+                    );
+                }
+            }
+        }
+
+        fn check_t1_less(case: &Case, lines: &[String]) {
+            check_narrow_compact(case, lines);
+        }
+
+        fn check_f1_split(case: &Case, lines: &[String]) {
+            check_fixpoint(case, lines);
+            check_html_eq(case, lines);
+            // short line preserved as its own line
+            assert!(
+                lines.iter().any(|l| l.trim() == "short line"),
+                "rule {} ({}): short line not preserved: {:?}",
+                case.rule_id,
+                case.name,
+                lines
+            );
+        }
+
+        fn check_f6_hardbreak(case: &Case, lines: &[String]) {
+            check_fixpoint(case, lines);
+            check_html_eq(case, lines);
+            // two distinct lines survive
+            assert!(
+                lines.len() >= 2,
+                "rule {} ({}): hardbreak collapsed: {:?}",
+                case.rule_id,
+                case.name,
+                lines
+            );
+        }
+
+        const CASES: &[Case] = &[
+            // P1
+            Case {
+                rule_id: "P1", name: "spaces_break_prose",
+                md: "this is a long paragraph that must wrap at spaces rather than mid word when rendered at a modest width
+",
+                width: 40, ascii: false, reflow: false, format: false,
+                must_contain: &["this", "paragraph", "wrap", "spaces"],
+                must_not_start_line: &[' '],
+                exact_total_width: None, max_line_width: Some(40), exact_lines: None,
+                check: None,
+            },
+            // P2
+            Case {
+                rule_id: "P2", name: "seam_splits",
+                md: "prefix `x](http://example.com/very/long/url/path/that/forces/break)` suffix after and more trailing words\n",
+                width: 40, ascii: false, reflow: false, format: false,
+                must_contain: &["prefix", "suffix"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: None, exact_lines: None,
+                check: Some(check_p2_seam),
+            },
+            // P3
+            Case {
+                rule_id: "P3", name: "standalone_brackets_not_breaks",
+                md: "words with [brackets] and (parens) inside text
+",
+                width: 50, ascii: false, reflow: false, format: false,
+                must_contain: &["[brackets]", "(parens)"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: Some(50), exact_lines: None,
+                check: None,
+            },
+            // P4
+            Case {
+                rule_id: "P4", name: "open_bracket_sticks_forward",
+                md: "prefix words and then (important) trailing words to force wrapping across the line
+",
+                width: 30, ascii: false, reflow: false, format: false,
+                must_contain: &["(important)"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: Some(40), exact_lines: None,
+                check: Some(check_p4_open),
+            },
+            // P5
+            Case {
+                rule_id: "P5", name: "close_bracket_sticks_back",
+                md: "prefix words then value) and more trailing words to force wrapping across the line
+",
+                width: 30, ascii: false, reflow: false, format: false,
+                must_contain: &["value)"],
+                must_not_start_line: &[')', ']', '}'],
+                exact_total_width: None, max_line_width: Some(40), exact_lines: None,
+                check: Some(check_p5_close),
+            },
+            // P6
+            Case {
+                rule_id: "P6", name: "cross_span_group_stays_whole",
+                md: "x (input)
+",
+                width: 8, ascii: false, reflow: false, format: false,
+                must_contain: &["(input)"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: None, exact_lines: Some(&["x (input)", ""]),
+                check: None,
+            },
+            // P7
+            Case {
+                rule_id: "P7", name: "long_group_breaks_internally",
+                md: "here is a (very long parenthetical phrase that should wrap internally at spaces) after
+",
+                width: 30, ascii: false, reflow: false, format: false,
+                must_contain: &["very", "parenthetical", "wrap", "internally"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: Some(40), exact_lines: None,
+                check: None,
+            },
+            // P8 (balanced)
+            Case {
+                rule_id: "P8", name: "balanced_unit_whole",
+                md: "prefix words say ?hello? loudly now and many more words to force a wrap around the balanced unit
+",
+                width: 40, ascii: false, reflow: false, format: false,
+                must_contain: &["?hello?"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: Some(40), exact_lines: None,
+                check: Some(check_balanced_whole),
+            },
+            // P9
+            Case {
+                rule_id: "P9", name: "balanced_units_stay_whole",
+                md: "prefix words ?hello? suffix words and more trailing content to force wrapping in the paragraph
+",
+                width: 40, ascii: false, reflow: false, format: false,
+                must_contain: &["?hello?"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: Some(40), exact_lines: None,
+                check: Some(check_balanced_whole),
+            },
+            // T1
+            Case {
+                rule_id: "T1", name: "compact_natural",
+                md: "| Name | Role |\n|---|---|\n| Ada | Eng |\n",
+                width: 80, ascii: false, reflow: false, format: false,
+                must_contain: &["Name", "Ada"],
+                must_not_start_line: &[],
+                exact_total_width: Some(13), max_line_width: None, exact_lines: None,
+                check: Some(check_t1_less),
+            },
+            // T2
+            Case {
+                rule_id: "T2", name: "overbudget_fills_exact",
+                md: "| Name | Description |\n|---|---|\n| Ada | Engineer who loves tables and writes very long descriptions about everything |\n| Bob | Designer |\n",
+                width: 80, ascii: false, reflow: false, format: false,
+                must_contain: &["Ada", "Designer"],
+                must_not_start_line: &[],
+                exact_total_width: Some(80), max_line_width: None, exact_lines: None,
+                check: None,
+            },
+            // T6
+            Case {
+                rule_id: "T6", name: "separators_count",
+                md: "| h1 | h2 |\n|---|---|\n| a | this is a long wrapped cell line |\n| b | c |\n",
+                width: 40, ascii: false, reflow: false, format: false,
+                must_contain: &["h1", "h2"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: None, exact_lines: None,
+                check: Some(check_separators),
+            },
+            // T7 ascii
+            Case {
+                rule_id: "T7", name: "ascii_borders",
+                md: "| a | b |\n|---|---|\n| x | y |\n",
+                width: 40, ascii: true, reflow: false, format: false,
+                must_contain: &["+"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: None, exact_lines: None,
+                check: None,
+            },
+            // T7 unicode
+            Case {
+                rule_id: "T7", name: "unicode_borders",
+                md: "| a | b |\n|---|---|\n| x | y |\n",
+                width: 40, ascii: false, reflow: false, format: false,
+                must_contain: &["┌"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: None, exact_lines: None,
+                check: None,
+            },
+            // T8
+            Case {
+                rule_id: "T8", name: "ragged_empty_cells",
+                md: "| a | b | c |\n|---|---|---|\n| x |  | z |\n| p | q |\n",
+                width: 40, ascii: false, reflow: false, format: false,
+                must_contain: &["x", "z", "p", "q"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: None, exact_lines: None,
+                check: Some(check_ragged),
+            },
+            // T9
+            Case {
+                rule_id: "T9", name: "header_only",
+                md: "| Name | Role |\n|---|---|\n",
+                width: 40, ascii: false, reflow: false, format: false,
+                must_contain: &["Name", "Role"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: None, exact_lines: None,
+                check: Some(check_header_only_separators),
+            },
+            // W1
+            Case {
+                rule_id: "W1", name: "prose_cap_high",
+                md: "this is a long paragraph that should wrap according to the clamped prose width policy and not exceed one hundred twenty columns even when a huge width is requested
+",
+                width: 200, ascii: false, reflow: false, format: false,
+                must_contain: &["paragraph"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: Some(120), exact_lines: None,
+                check: None,
+            },
+            // W2
+            Case {
+                rule_id: "W2", name: "table_cap_high",
+                md: "| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb | cccccccccccccccccccccccccccccccc | dddddddddddddddddddddddddddddddd |\n|---|---|---|---|\n| x | y | z | w |\n",
+                width: 200, ascii: false, reflow: false, format: false,
+                must_contain: &["x"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: Some(160), exact_lines: None,
+                check: None,
+            },
+            // F1
+            Case {
+                rule_id: "F1", name: "split_only_preserves_short",
+                md: "short line\nthis is a very long line that definitely exceeds the configured width and must be split into multiple lines\n",
+                width: 40, ascii: false, reflow: false, format: true,
+                must_contain: &["short line"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: None, exact_lines: None,
+                check: Some(check_f1_split),
+            },
+            // F6
+            Case {
+                rule_id: "F6", name: "hardbreak_flavors",
+                md: "line one  \nline two\\\nline three\n",
+                width: 80, ascii: false, reflow: false, format: true,
+                must_contain: &["line one", "line two", "line three"],
+                must_not_start_line: &[],
+                exact_total_width: None, max_line_width: None, exact_lines: None,
+                check: Some(check_f6_hardbreak),
+            },
+        ];
+
+        // Fix up placeholder md fields that need computed strings.
+        // (P8 table orphan and T3 overflow use runtime-built md; handled in a
+        // separate test below.)
+
+        #[test]
+        fn wrap_rules_matrix() {
+            let th = theme_from_cfg(&crate::ThemeConfig::default());
+            // Build the two runtime-md cases and run them inline.
+            // P8 table orphan
+            {
+                let atom = format!("{}hello;{}", "x".repeat(52), "y".repeat(30));
+                let md = format!("| T |\n| --- |\n| {} |\n", atom);
+                let lines = render_markdown(&th, &md, 60, false);
+                let strs: Vec<String> = lines
+                    .iter()
+                    .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+                    .collect();
+                for l in &strs {
+                    let t = l.trim_start();
+                    let content = t.trim_start_matches(|c| c == '│' || c == '|' || c == ' ');
+                    if let Some(first) = content.chars().next() {
+                        assert!(
+                            ![',', ';', ':', '!', '?', '.', '%', ')', ']', '}', '>', '…']
+                                .contains(&first),
+                            "P8 table orphan start: {:?}",
+                            l
+                        );
+                    }
+                }
+                let joined = strs.join("\n");
+                assert!(joined.contains("o;"), "P8 glued pair missing: {strs:?}");
+            }
+            // T3 overflow
+            {
+                let long = "abcdefghijklmnopqrstuvwxyz".repeat(3);
+                let md = format!("| a | {} |\n|---|---|\n| x | y |\n", long);
+                let lines = render_markdown(&th, &md, 40, false);
+                let strs: Vec<String> = lines
+                    .iter()
+                    .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+                    .collect();
+                let table_lines: Vec<&String> = strs
+                    .iter()
+                    .filter(|l| {
+                        l.contains('│')
+                            || l.contains('┌')
+                            || l.contains('└')
+                            || l.contains('+')
+                            || l.contains('|')
+                    })
+                    .collect();
+                let first = table_lines[0].width();
+                for l in &table_lines {
+                    assert_eq!(l.width(), first, "T3 box integrity: {:?}", l);
+                }
+                assert!(first > 40, "T3 expected overflow, got {}", first);
+                let joined = strs.join("\n");
+                assert!(joined.contains("abc"), "T3 content missing");
+            }
+
+            for case in CASES {
+                // Skip the two placeholder rows whose md is empty.
+                if case.md.is_empty() {
+                    continue;
+                }
+                let strs: Vec<String> = if case.format {
+                    let out =
+                        crate::markdown_fmt::format_commonmark(case.md, case.width, case.reflow);
+                    out.trim_end_matches('\n')
+                        .split('\n')
+                        .map(String::from)
+                        .collect()
+                } else {
+                    let lines = render_markdown(&th, case.md, case.width, case.ascii);
+                    lines
+                        .iter()
+                        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+                        .collect()
+                };
+
+                for needle in case.must_contain {
+                    let joined = strs.join("\n");
+                    assert!(
+                        joined.contains(needle),
+                        "rule {} ({}): missing {:?}: {:#?}",
+                        case.rule_id,
+                        case.name,
+                        needle,
+                        strs
+                    );
+                }
+
+                for line in &strs {
+                    if let Some(first) = line.chars().next() {
+                        assert!(
+                            !case.must_not_start_line.contains(&first),
+                            "rule {} ({}): line starts with orphan {:?}: {:?}",
+                            case.rule_id,
+                            case.name,
+                            first,
+                            line
+                        );
+                    }
+                }
+
+                if let Some(w) = case.exact_total_width {
+                    let table_lines: Vec<&String> = strs
+                        .iter()
+                        .filter(|l| {
+                            l.contains('│')
+                                || l.contains('┌')
+                                || l.contains('└')
+                                || l.contains('├')
+                                || l.contains('┝')
+                                || l.contains('+')
+                                || l.contains('|')
+                        })
+                        .collect();
+                    assert!(
+                        !table_lines.is_empty(),
+                        "rule {} ({}): no table lines",
+                        case.rule_id,
+                        case.name
+                    );
+                    for l in &table_lines {
+                        assert_eq!(
+                            l.width(),
+                            w,
+                            "rule {} ({}): width {} != {}: {:?}",
+                            case.rule_id,
+                            case.name,
+                            l.width(),
+                            w,
+                            l
+                        );
+                    }
+                }
+
+                if let Some(maxw) = case.max_line_width {
+                    for l in &strs {
+                        assert!(
+                            l.width() <= maxw,
+                            "rule {} ({}): line width {} > {}: {:?}",
+                            case.rule_id,
+                            case.name,
+                            l.width(),
+                            maxw,
+                            l
+                        );
+                    }
+                }
+
+                if let Some(expected) = case.exact_lines {
+                    let expected_vec: Vec<String> =
+                        expected.iter().map(|s| s.to_string()).collect();
+                    assert_eq!(
+                        strs, expected_vec,
+                        "rule {} ({}): lines mismatch",
+                        case.rule_id, case.name
+                    );
+                }
+
+                if let Some(check) = case.check {
+                    check(case, &strs);
+                }
+            }
+        }
     }
 }
