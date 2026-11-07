@@ -19,5 +19,5 @@ Planned fix:
 - `write_colored!` macro: use let \_ = or ok() for I/O calls
 - `list_tasks()`: return Result instead of calling process::exit()
 - `filter::run_filter`: either implement ANSI color output or remove
-  no\_color flag (needs exploration — ratatui can't emit ANSI to
-  stdout, may need termcolor bridge)
+  no\_color flag (needs exploration — ratatui can't emit ANSI to stdout,
+  may need termcolor bridge)

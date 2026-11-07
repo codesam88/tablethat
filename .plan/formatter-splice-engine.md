@@ -55,10 +55,10 @@ tables or code blocks.
 
 #### Functional requirements (v1 normalization set)
 
-- **FR-1 — Join policy follows `format_reflow`.** With reflow off,
-  soft line breaks pass through untouched; short lines are never drawn
-  up into the line above. With reflow on (default), each paragraph unit
-  is joined into word flow and re-split to the width.
+- **FR-1 — Join policy follows `format_reflow`.** With reflow off, soft
+  line breaks pass through untouched; short lines are never drawn up
+  into the line above. With reflow on (default), each paragraph unit is
+  joined into word flow and re-split to the width.
 - **FR-2 — Preserve hardbreak flavor.** `two-spaces + newline` and
   `backslash + newline` are both kept as authored, and each ends the
   current wrapping unit: segments wrap (and reflow) independently.
@@ -75,8 +75,8 @@ tables or code blocks.
   spaces, `1. ` → three, `> ` preserved, nesting accumulates).
 - **FR-5 — Inline code spans are atomic words.** A code span never
   breaks across lines; a single word (code span or otherwise) longer
-  than the width is left overflowing — width is a preference, not a
-  cap (Prettier's printWidth principle).
+  than the width is left overflowing — width is a preference, not a cap
+  (Prettier's printWidth principle).
 - **FR-6 — Verbatim and headings pass through.** Fenced/indented code
   blocks, ATX/setext headings, HTML blocks, thematic breaks: untouched.
 - **FR-7 — Strip trailing whitespace**, exempting hardbreak markers
@@ -107,8 +107,8 @@ tables or code blocks.
   low milliseconds; measure the `.plan/` corpus before/after, no
   regression beyond noise. (`plan` starts in ~30 ms; formatting must not
   dominate the pre-commit hook.)
-- **NFR-5 — Purity.** The engine stays a pure `&str -> String`
-  function (no I/O), so every behavior is unit-testable.
+- **NFR-5 — Purity.** The engine stays a pure `&str -> String` function
+  (no I/O), so every behavior is unit-testable.
 
 #### Non-goals (v1)
 
@@ -133,9 +133,9 @@ is a follow-up note, not v1 scope.
 `format_commonmark` (`src/markdown_fmt.rs`): build options → comrak
 `markdown_to_commonmark` with `render.width = 120` (this setting is the
 reflow mechanism behind bug 1) → hand-rolled `align_tables` string
-splitter (bug 3's mechanism) → blanket trailing-whitespace strip
-(would eat hardbreaks if comrak hadn't pre-converted them — bug 2's
-churn). Options constructor is now shared with the renderer
+splitter (bug 3's mechanism) → blanket trailing-whitespace strip (would
+eat hardbreaks if comrak hadn't pre-converted them — bug 2's churn).
+Options constructor is now shared with the renderer
 (`comrak_options()`).
 
 #### Target design

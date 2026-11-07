@@ -34,11 +34,11 @@ green deny/audit and hardens local CLI trust boundary.
 
 ## Solution strategy
 
-Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename —
-decisive drawback of rename is it keeps c2rust-transpiled `libyaml-rs`
-unsafe. Rejected `serde_yaml_ng` (still `unsafe-libyaml`). Order: 1B, 3,
-4, 5, 6, 2-watch. History in CHANGELOG + Progress below (brief removed
-as basic-crate noise).
+Chosen: pure-Rust YAML (1B) over drop-in `yaml_serde` rename — decisive
+drawback of rename is it keeps c2rust-transpiled `libyaml-rs` unsafe.
+Rejected `serde_yaml_ng` (still `unsafe-libyaml`). Order: 1B, 3, 4, 5,
+6, 2-watch. History in CHANGELOG + Progress below (brief removed as
+basic-crate noise).
 
 ## Implementation steps
 
@@ -52,9 +52,8 @@ as basic-crate noise).
 - [x] Step 4 (5A+B): config/theme warnings + `Result` propagation.
 - [x] Step 5 (6A+B+C): workflow permissions + dependabot + release
       attestation.
-- [x] Step 6 (2A): `lru` fixed upstream — monitor via daily
-      `audit.yml` (no action; `cargo audit` currently shows 1 allowed
-      warning).
+- [x] Step 6 (2A): `lru` fixed upstream — monitor via daily `audit.yml`
+      (no action; `cargo audit` currently shows 1 allowed warning).
 
 ## Security (labels: [class|severity|effort])
 

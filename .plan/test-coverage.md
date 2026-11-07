@@ -19,6 +19,6 @@ Planned tests:
   traversal, resolve\_file search order
 - theme.rs: load\_themes() discovery across directories, fallback to
   default
-- gloss/filter.rs: stdin→stdout pipeline (may need exploration on how
-  to test interactive TUI code)
+- gloss/filter.rs: stdin→stdout pipeline (may need exploration on how to
+  test interactive TUI code)
 - Integration tests: plan add/open/delete lifecycle, gloss file viewing

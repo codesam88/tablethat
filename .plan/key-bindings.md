@@ -68,11 +68,10 @@ area:
 - 2026-11-01 follow-up: Ctrl-C cancels search like Esc in all three
   search inputs (browse, preview, gloss) — previously typed a literal
   `c`. Shared cancel helpers + 3 tests.
-- 2026-10-31 (tui-tuneups batch): DONE — gloss paging follows
-  viewport; browse PgUp/PgDn home/end with wrap, Up/Down wrap around;
-  Esc debounce (`Press Esc again`, 2s); browse `/` filter-as-you-type
-  with slug highlight; editor opens at cursor line (vi/emacs `+N`);
-  browse columns attention-ordered; markdown render harness
-  (`tests/gloss_render.rs`). Untouched: reversed list default, add
-  dialog, configurable keys, multi-line table cells, search history,
-  subtler borders.
+- 2026-10-31 (tui-tuneups batch): DONE — gloss paging follows viewport;
+  browse PgUp/PgDn home/end with wrap, Up/Down wrap around; Esc debounce
+  (`Press Esc again`, 2s); browse `/` filter-as-you-type with slug
+  highlight; editor opens at cursor line (vi/emacs `+N`); browse columns
+  attention-ordered; markdown render harness (`tests/gloss_render.rs`).
+  Untouched: reversed list default, add dialog, configurable keys,
+  multi-line table cells, search history, subtler borders.
