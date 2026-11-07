@@ -620,6 +620,22 @@ fn render_table(
             .collect();
     }
 
+    // Floor dust: integer division can leave every cut at zero while the
+    // table is still over budget (e.g. deficit 1 against flex 30). Shave
+    // the remainder off the widest above-minimum columns one cell at a
+    // time so the total lands exactly on budget and the right border
+    // never spills into the scrollbar gap. Terminates: each step shrinks
+    // the sum; stops at all-minimum (accepted overflow, same as above).
+    while col_w.iter().sum::<usize>() > target {
+        let Some(i) = (0..ncols)
+            .filter(|&j| col_w[j] > cols[j].min)
+            .max_by_key(|&j| col_w[j])
+        else {
+            break;
+        };
+        col_w[i] -= 1;
+    }
+
     // Collect non-empty rows (skip empties, as before).
     let rows: Vec<&Vec<String>> = tbl.iter().filter(|r| !r.is_empty()).collect();
     if rows.is_empty() {
@@ -1573,6 +1589,30 @@ mod tests {
         }
         assert!(strs.iter().any(|l| l.contains("Name")));
         assert!(strs.iter().any(|l| l.contains("Ada")));
+    }
+
+    #[test]
+    fn table_shrink_dust_fills_exact_budget() {
+        // Deficit 1 against flex 30: every proportional cut floors to 0, so
+        // a floor-only shrink would leave the table 1 over budget (81).
+        // The dust pass must shave the remainder for an exact fit.
+        let md = "| A | B | C |\n|---|---|---|\n| aaaaaaaaaaaaaa bbbbbbbbb | ccccccccccccccc ddddddddd | eeeeeeeeeeeeeee fffffffff |\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 80, false);
+        let strs: Vec<String> = lines
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        use unicode_width::UnicodeWidthStr;
+        let widths: Vec<usize> = strs
+            .iter()
+            .filter(|l| l.contains('┌') || l.contains('│') || l.contains('└'))
+            .map(|l| l.width())
+            .collect();
+        assert!(!widths.is_empty(), "expected table lines");
+        for w in &widths {
+            assert_eq!(*w, 80, "shrink dust must not overflow budget");
+        }
     }
 
     #[test]
