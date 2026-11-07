@@ -530,6 +530,7 @@ fn render_table(
         p60: usize,
         p80: usize,
         p100: usize,
+        natural: usize,
     }
     let mut cols: Vec<ColW> = Vec::new();
     for _ in 0..ncols {
@@ -538,6 +539,7 @@ fn render_table(
             p60: 0,
             p80: 0,
             p100: 0,
+            natural: 0,
         });
     }
     let mut all_lens: Vec<Vec<usize>> = vec![Vec::new(); ncols];
@@ -566,18 +568,12 @@ fn render_table(
         cols[i].p60 = cap(s.get(idx60).copied().unwrap_or(4));
         cols[i].p80 = cap(s.get(idx80).copied().unwrap_or(4)).max(cols[i].p60);
         cols[i].p100 = cap(s.get(last).copied().unwrap_or(4)).max(cols[i].p80);
+        // Uncapped max cell display width (for proportional fill).
+        cols[i].natural = s.last().copied().unwrap_or(0);
     }
 
-    let border_w = ncols * 3 + 1;
-    let p80_total: usize = cols.iter().map(|c| c.p80).sum::<usize>() + border_w;
-    let target = if p80_total <= table_hi {
-        60usize
-            .max(p80_total)
-            .min(table_hi)
-            .saturating_sub(border_w)
-    } else {
-        60usize.saturating_sub(border_w)
-    };
+    let border_w = ncols * 2 + 1;
+    let target = table_hi.saturating_sub(border_w);
 
     let mut col_w: Vec<usize> = cols.iter().map(|c| c.p60).collect();
     let used: usize = col_w.iter().sum();
@@ -638,10 +634,31 @@ fn render_table(
     }
 
     let slack = target.saturating_sub(col_w.iter().sum());
-    if slack > 0
-        && let Some(max_i) = (0..ncols).max_by_key(|&i| col_w[i])
-    {
-        col_w[max_i] += slack;
+    if slack > 0 {
+        // Proportional fill: distribute slack by headroom (natural - col_w).
+        let mut weights: Vec<usize> = (0..ncols)
+            .map(|i| cols[i].natural.saturating_sub(col_w[i]))
+            .collect();
+        if weights.iter().all(|&w| w == 0) {
+            weights = (0..ncols).map(|i| cols[i].natural).collect();
+        }
+        if weights.iter().sum::<usize>() == 0 {
+            weights = vec![1usize; ncols];
+        }
+        let total_w: usize = weights.iter().sum();
+        let mut shares: Vec<usize> = (0..ncols)
+            .map(|i| slack * weights[i] / total_w.max(1))
+            .collect();
+        let allocated: usize = shares.iter().sum();
+        let remainder = slack.saturating_sub(allocated);
+        if remainder > 0
+            && let Some(max_i) = (0..ncols).max_by_key(|&i| col_w[i])
+        {
+            shares[max_i] += remainder;
+        }
+        for i in 0..ncols {
+            col_w[i] += shares[i];
+        }
     }
 
     // Collect non-empty rows (skip empties, as before).
@@ -1433,6 +1450,8 @@ mod tests {
 
     #[test]
     fn table_narrow_fits_budget_unchanged() {
+        // Contract superseded by fill-to-budget: a narrow table now fills the
+        // full width budget (80) instead of sitting at content width.
         let md = "| Name | Role |
 |---|---|
 | Ada | Eng |
@@ -1444,9 +1463,100 @@ mod tests {
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
             .collect();
         eprintln!("narrow: {:#?}", strs);
-        // Basic shape: 5 lines table + blank
+        use unicode_width::UnicodeWidthStr;
+        let table_widths: Vec<usize> = strs
+            .iter()
+            .filter(|l| {
+                l.contains('┌')
+                    || l.contains('│')
+                    || l.contains('└')
+                    || l.contains('├')
+                    || l.contains('┝')
+            })
+            .map(|l| l.width())
+            .collect();
+        for w in &table_widths {
+            assert_eq!(*w, 80, "narrow table must fill budget");
+        }
         assert!(strs.iter().any(|l| l.contains("Name")));
         assert!(strs.iter().any(|l| l.contains("Ada")));
+    }
+
+    #[test]
+    fn table_fills_budget() {
+        let md = "| a | b | c |\n|---|---|---|\n| 1 | 2 | 3 |\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 80, false);
+        let strs: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        eprintln!("fills: {:#?}", strs);
+        use unicode_width::UnicodeWidthStr;
+        let start = strs
+            .iter()
+            .position(|l| l.contains('┌') || l.contains('+'))
+            .expect("top border");
+        let end = strs
+            .iter()
+            .rposition(|l| l.contains('└') || l.contains('+'))
+            .expect("bottom border");
+        for (i, l) in strs[start..=end].iter().enumerate() {
+            assert_eq!(
+                l.width(),
+                80,
+                "table line {} width {} != 80: {:?}",
+                start + i,
+                l.width(),
+                l
+            );
+        }
+    }
+
+    #[test]
+    fn table_surplus_proportional() {
+        let md =
+            "| tenchars!! | this is a medium length column text here |\n|---|---|\n| x | y |\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 80, false);
+        let strs: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        eprintln!("prop: {:#?}", strs);
+
+        // Extract column widths from the top border.
+        fn col_widths(border: &str) -> Vec<usize> {
+            let s = border.trim();
+            // strip first and last corner
+            let inner = s
+                .trim_start_matches(|c| c == '┌' || c == '+')
+                .trim_end_matches(|c| c == '┐' || c == '+');
+            // split by mid corners
+            inner
+                .split(|c| c == '┬' || c == '+')
+                .map(|seg| seg.chars().count().saturating_sub(1))
+                .collect()
+        }
+        let border = strs
+            .iter()
+            .find(|l| l.contains('┌') || l.contains('+'))
+            .expect("top border");
+        let finals = col_widths(border);
+        assert_eq!(finals.len(), 2);
+
+        // Naturals: uncapped max cell display width per column.
+        let naturals = [10usize, 40usize];
+        // gain = final - natural (approximates fill gain)
+        let gain0 = finals[0] as isize - naturals[0] as isize;
+        let gain1 = finals[1] as isize - naturals[1] as isize;
+        assert!(
+            gain1 >= gain0,
+            "wider column gain {} must be >= narrower gain {}: finals={:?}",
+            gain1,
+            gain0,
+            finals
+        );
     }
 
     // -------------------------------------------------------------------------
