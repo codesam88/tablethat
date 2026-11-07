@@ -390,6 +390,114 @@ fn highlight_desc_term(mut body: Vec<Span<'static>>, th: &MarkdownTheme) -> Vec<
     out
 }
 
+/// Display width of `s` in terminal columns (unicode-aware).
+pub fn display_width(s: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    s.width()
+}
+
+/// Greedy whitespace wrap of a single table cell to `width` display columns.
+///
+/// Hard-breaks atoms wider than `width` char-wise (accumulating display width,
+/// wide char = 2, never splitting a char). Empty input -> `vec![""]`.
+/// Marker protection is intentionally omitted: `collect_text` does not preserve
+/// backtick/bracket markers, so cells are plain text.
+pub fn wrap_cell(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let text = text.trim();
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    fn char_width(ch: char) -> usize {
+        use unicode_width::UnicodeWidthChar;
+        UnicodeWidthChar::width(ch).unwrap_or(0)
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
+
+    for word in text.split_whitespace() {
+        let ww = display_width(word);
+        if cur.is_empty() {
+            if ww <= width {
+                cur.push_str(word);
+                cur_w = ww;
+            } else {
+                // hard-break
+                if !cur.is_empty() {
+                    lines.push(std::mem::take(&mut cur));
+                    cur_w = 0;
+                }
+                let mut chunk = String::new();
+                let mut cw = 0usize;
+                for ch in word.chars() {
+                    let cwch = char_width(ch).max(1);
+                    if cw > 0 && cw + cwch > width {
+                        lines.push(std::mem::take(&mut chunk));
+                        cw = 0;
+                    }
+                    chunk.push(ch);
+                    cw += cwch;
+                }
+                if !chunk.is_empty() {
+                    cur = chunk;
+                    cur_w = cw;
+                }
+            }
+        } else {
+            if cur_w + 1 + ww <= width {
+                cur.push(' ');
+                cur.push_str(word);
+                cur_w += 1 + ww;
+            } else {
+                lines.push(std::mem::take(&mut cur));
+                cur_w = 0;
+                if ww <= width {
+                    cur.push_str(word);
+                    cur_w = ww;
+                } else {
+                    let mut chunk = String::new();
+                    let mut cw = 0usize;
+                    for ch in word.chars() {
+                        let cwch = char_width(ch).max(1);
+                        if cw > 0 && cw + cwch > width {
+                            lines.push(std::mem::take(&mut chunk));
+                            cw = 0;
+                        }
+                        chunk.push(ch);
+                        cw += cwch;
+                    }
+                    if !chunk.is_empty() {
+                        cur = chunk;
+                        cur_w = cw;
+                    }
+                }
+            }
+        }
+    }
+
+    if !cur.is_empty() || lines.is_empty() {
+        lines.push(cur);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn pad_display(s: &str, width: usize) -> String {
+    let dw = display_width(s);
+    if dw >= width {
+        s.to_string()
+    } else {
+        let mut out = s.to_string();
+        out.push_str(&" ".repeat(width - dw));
+        out
+    }
+}
+
 fn render_table(
     node: &comrak::Node<'_>,
     lines: &mut Vec<Line<'static>>,
@@ -438,11 +546,11 @@ fn render_table(
         for (i, cell) in row.iter().enumerate() {
             let lw = cell
                 .split_whitespace()
-                .map(|w| w.len())
+                .map(display_width)
                 .max()
-                .unwrap_or(cell.len());
+                .unwrap_or(display_width(cell));
             cols[i].min = cols[i].min.max(lw.min(40));
-            all_lens[i].push(cell.len());
+            all_lens[i].push(display_width(cell));
         }
     }
 
@@ -564,15 +672,24 @@ fn render_table(
         lines.push(Line::from(hborder('┌', '┬', '┐', '─')));
     }
 
-    // Helper to emit a data row (unchanged row shape).
+    // Helper to emit a (possibly wrapped) data row.
     let emit_row = |row: &Vec<String>, lines: &mut Vec<Line<'static>>| {
-        let mut buf = String::from(v);
+        let mut cell_lines: Vec<Vec<String>> = Vec::new();
         for (i, &w) in col_w.iter().enumerate() {
             let raw = row.get(i).map(|s| s.as_str()).unwrap_or("");
-            let cell: String = raw.chars().take(w).collect();
-            buf.push_str(&format!(" {:<w$}{}", cell, v, w = w));
+            cell_lines.push(wrap_cell(raw, w));
         }
-        lines.push(Line::from(buf));
+        let height = cell_lines.iter().map(|v| v.len()).max().unwrap_or(1).max(1);
+        for li in 0..height {
+            let mut buf = String::from(v);
+            for (i, &w) in col_w.iter().enumerate() {
+                let cell_text = cell_lines[i].get(li).map(|s| s.as_str()).unwrap_or("");
+                buf.push(' ');
+                buf.push_str(&pad_display(cell_text, w));
+                buf.push_str(v);
+            }
+            lines.push(Line::from(buf));
+        }
     };
 
     if rows.len() == 1 {
@@ -749,8 +866,9 @@ fn render_node(
 
 /// Render markdown to styled lines: strips frontmatter, parses with comrak
 /// (tables, tasklists, strikethrough, autolink), wraps paragraphs to `wrap`
-/// columns. Headings render on one line; code blocks and tables are never
-/// word-wrapped. See `wrap_spans` for bracket grouping rules.
+/// columns. Headings render on one line; code blocks are never word-wrapped;
+/// table cells wrap to the computed column width. See `wrap_spans` for bracket
+/// grouping rules.
 ///
 /// ```
 /// # use tablethat_lib::{ThemeConfig, markdown::{render_markdown, theme_from_cfg}};
@@ -806,7 +924,7 @@ mod tests {
     //
     // 4. TABLES:
     //    - Column-based layout with computed widths
-    //    - No word wrap within cells
+    //    - Cells wrap to the computed column width
     //    - Columns padded to calculated width (p60/p80/p100 percentiles)
     //
     // 5. HEADINGS:
@@ -1087,7 +1205,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Table tests (column-based, no word wrap)
+    // Table tests (column-based, cells wrap)
     // -------------------------------------------------------------------------
 
     #[test]
@@ -1142,6 +1260,193 @@ mod tests {
             table_text.contains("A much") || table_text.contains("longer"),
             "Table should contain header text"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Table wrapping tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn table_cell_long_wraps_no_truncation() {
+        let md = "| a | this is a very long cell that should wrap instead of being truncated |
+|---|---|
+| x | y |
+";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 40, false);
+        let table_text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for w in [
+            "this",
+            "very",
+            "long",
+            "cell",
+            "should",
+            "wrap",
+            "instead",
+            "truncated",
+        ] {
+            assert!(table_text.contains(w), "missing word {w}");
+        }
+        // No truncation marker: full word 'truncated' present (not 'truncat' only).
+        assert!(table_text.contains("truncated"));
+    }
+
+    #[test]
+    fn table_box_integrity_uniform_width() {
+        let md = "| a | this is a very long cell that wraps |
+|---|---|
+| x | y |
+";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 40, false);
+        use unicode_width::UnicodeWidthStr;
+        let strs: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // Find table block: from first line containing border corner to last.
+        let start = strs
+            .iter()
+            .position(|l| l.contains('┌') || l.contains('+'))
+            .unwrap();
+        let end = strs
+            .iter()
+            .rposition(|l| l.contains('└') || l.contains('+'))
+            .unwrap();
+        let widths: Vec<usize> = strs[start..=end].iter().map(|l| l.width()).collect();
+        let first = widths[0];
+        for (i, w) in widths.iter().enumerate() {
+            assert_eq!(
+                *w,
+                first,
+                "line {} width {} != {} : {:?}",
+                start + i,
+                w,
+                first,
+                strs[start + i]
+            );
+        }
+    }
+
+    #[test]
+    fn table_separators_only_between_logical_rows() {
+        let md = "| h1 | h2 |
+|---|---|
+| a | this is a long wrapped cell line |
+| b | c |
+";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 40, false);
+        let strs: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // Count horizontal separator lines (top/header/body/bottom borders).
+        let sep_count = strs
+            .iter()
+            .filter(|l| {
+                let t = l.trim();
+                !t.is_empty() && t.chars().all(|c| "┌┬┐├┼┤└┴┘┝┿┥─━=+-".contains(c))
+            })
+            .count();
+        // header + 2 body rows => top + header-sep + 1 body-sep + bottom = 4
+        assert_eq!(sep_count, 4, "got lines: {:#?}", strs);
+    }
+
+    #[test]
+    fn table_overlong_url_hard_breaks() {
+        let md = "| a | http://example.com/this/is/a/very/long/url/without/spaces |
+|---|---|
+| x | y |
+";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 40, false);
+        let strs: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // box integrity
+        let start = strs
+            .iter()
+            .position(|l| l.contains('┌') || l.contains('+'))
+            .unwrap();
+        let end = strs
+            .iter()
+            .rposition(|l| l.contains('└') || l.contains('+'))
+            .unwrap();
+        let widths: Vec<usize> = strs[start..=end]
+            .iter()
+            .map(|l| {
+                use unicode_width::UnicodeWidthStr;
+                l.width()
+            })
+            .collect();
+        let first = widths[0];
+        for w in &widths {
+            assert_eq!(*w, first);
+        }
+        let table_text = strs.join("\n");
+        assert!(table_text.contains("http"));
+    }
+
+    #[test]
+    fn table_cjk_cell_wraps_aligned() {
+        let md = "| a | 你好世界这是一个很长的单元格内容 |
+|---|---|
+| x | y |
+";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 40, false);
+        let strs: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        let start = strs
+            .iter()
+            .position(|l| l.contains('┌') || l.contains('+'))
+            .unwrap();
+        let end = strs
+            .iter()
+            .rposition(|l| l.contains('└') || l.contains('+'))
+            .unwrap();
+        let widths: Vec<usize> = strs[start..=end]
+            .iter()
+            .map(|l| {
+                use unicode_width::UnicodeWidthStr;
+                l.width()
+            })
+            .collect();
+        let first = widths[0];
+        for w in &widths {
+            assert_eq!(*w, first);
+        }
+    }
+
+    #[test]
+    fn table_narrow_fits_budget_unchanged() {
+        let md = "| Name | Role |
+|---|---|
+| Ada | Eng |
+";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 80, false);
+        let strs: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        eprintln!("narrow: {:#?}", strs);
+        // Basic shape: 5 lines table + blank
+        assert!(strs.iter().any(|l| l.contains("Name")));
+        assert!(strs.iter().any(|l| l.contains("Ada")));
     }
 
     // -------------------------------------------------------------------------
