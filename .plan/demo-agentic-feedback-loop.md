@@ -77,8 +77,8 @@ Needs: agent-friendly CLI commands. Already works — `plan add`,
 
 ### Level 3: CI integration (high)
 
-Full loop: agent creates task → opens PR → CI runs → agent reads
-results → fixes failures → re-pushes.
+Full loop: agent creates task → opens PR → CI runs → agent reads results
+→ fixes failures → re-pushes.
 
 ```
 Agent ──► plan add fix-auth
@@ -117,8 +117,8 @@ programmatically:
 }
 ```
 
-The plan CLI already has the right interface for this — each
-subcommand maps to an MCP tool.
+The plan CLI already has the right interface for this — each subcommand
+maps to an MCP tool.
 
 ### Trust and policy
 

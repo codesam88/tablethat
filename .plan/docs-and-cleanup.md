@@ -20,5 +20,5 @@ Planned fix:
 - Deduplicate `status_color`/`priority_color` — currently in both
   tasks.rs and tui\_kanban.rs, move to lib.rs
 - Replace `sensible-editor` with `vi` in editor fallback (Debian-only)
-- Fix non-Unix `is_tty()` — currently always returns true, should
-  detect piped stdin
+- Fix non-Unix `is_tty()` — currently always returns true, should detect
+  piped stdin

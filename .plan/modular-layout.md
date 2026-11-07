@@ -31,9 +31,9 @@ wrappers exist in 3 places). Adopted with amendments:
   triplication at move time (`color.rs` canonical); new files use
   `src/plan.rs` / `src/gloss.rs` mod roots (modern style, dir already
   exists).
-- Global rule: moves are byte-identical code motion — tests travel
-  with code, bodies unchanged. A red test after a move step means a move
-  bug, never "fix the test".
+- Global rule: moves are byte-identical code motion — tests travel with
+  code, bodies unchanged. A red test after a move step means a move bug,
+  never "fix the test".
 
 ## Problem / purpose
 

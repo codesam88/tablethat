@@ -34,5 +34,5 @@ styling.
 
 ### try opencode style
 
-Implemented better one as `codesam` theme — orange/brown headlines
-with green code variants.
+Implemented better one as `codesam` theme — orange/brown headlines with
+green code variants.

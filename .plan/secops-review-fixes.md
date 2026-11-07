@@ -15,10 +15,9 @@ integrity, crash, gates, then ride-alongs.
 
 - [x] Step 0: `cargo update`, verify suite + deny/audit, commit
       lockfile.
-- [x] Step 1: frontmatter injection — validate values in
-      `create_task`, YAML-quote strings in `value_to_yaml_str` (TDD).
-- [x] Step 2: gloss highlight Unicode panic — char-aware offsets
-      (TDD).
+- [x] Step 1: frontmatter injection — validate values in `create_task`,
+      YAML-quote strings in `value_to_yaml_str` (TDD).
+- [x] Step 2: gloss highlight Unicode panic — char-aware offsets (TDD).
 - [x] Step 3: release gates — test/clippy/audit before publish.
 - [x] Step 4: pin action SHAs.
 - [x] Step 5: `list_tasks` returns `Result` (drop lib `exit`).
@@ -37,8 +36,8 @@ integrity, crash, gates, then ride-alongs.
 ## Progress (newest first)
 
 - 2026-10-31: Steps 7+8+9 DONE. MSRV job runs clippy + smoke on 1.89
-  (proven locally first; no fmt — rustfmt drifts between versions).
-  Doc links use explicit crate paths (`cargo doc` zero warnings).
+  (proven locally first; no fmt — rustfmt drifts between versions). Doc
+  links use explicit crate paths (`cargo doc` zero warnings).
   `store::sorted_md_entries` (sorted, Err on IO failure) rewired into
   `plan format <dir>` + gloss browser; unit + e2e pins. 128 green.
 - 2026-10-31: Step 6 DONE (TDD: helper RED missing, GREEN first pass).

@@ -77,8 +77,8 @@ Body text here...   # ← harder, needs OT or block-level merge
 | `area`     | string            | Last-write-wins                |
 | Body text  | freeform markdown | Block-level or last-write-wins |
 
-Frontmatter is trivially mergeable. Body text is the hard part — but
-for task management, the frontmatter is what matters most.
+Frontmatter is trivially mergeable. Body text is the hard part — but for
+task management, the frontmatter is what matters most.
 
 ### Exploration needed
 

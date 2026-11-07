@@ -22,8 +22,8 @@ area: testing
 #### Formatting pipeline (format\_commonmark)
 
 The `format_commonmark()` function chains three steps: comrak formatting
-→ `align_tables()` → `strip_trailing_whitespace()`. No tests cover
-this pipeline.
+→ `align_tables()` → `strip_trailing_whitespace()`. No tests cover this
+pipeline.
 
 **Test cases needed:**
 
