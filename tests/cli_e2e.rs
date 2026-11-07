@@ -568,3 +568,129 @@ fn gloss_filter_table_borders_respect_ascii_flag() {
         "ascii mode must use equals header fill"
     );
 }
+
+// --- general markdown fixtures ---------------------------------------------
+
+fn general_md_fixtures() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/general-md")
+}
+
+fn split_frontmatter(s: &str) -> Option<String> {
+    let mut lines = s.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    let mut out = vec!["---"];
+    for line in lines {
+        out.push(line);
+        if line.trim() == "---" {
+            return Some(out.join("\n"));
+        }
+    }
+    None
+}
+
+#[test]
+fn general_md_lint_skips_no_frontmatter_and_fails_invalid() {
+    let r = Root::new();
+    let fx = general_md_fixtures();
+    let out = r.run(r.plan().arg("lint").arg(&fx));
+    assert!(
+        !out.status.success(),
+        "lint must fail on invalid/unclosed fixtures"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("invalid-yaml.md"),
+        "stderr must name invalid-yaml.md: {stderr}"
+    );
+    assert!(
+        stderr.contains("unclosed.md"),
+        "stderr must name unclosed.md: {stderr}"
+    );
+    assert!(
+        !stderr.contains("no-frontmatter.md"),
+        "no-frontmatter.md must be skipped silently: {stderr}"
+    );
+}
+
+#[test]
+fn general_md_format_check_reports_skipped_and_would_format() {
+    let r = Root::new();
+    let fx = general_md_fixtures();
+    let out = r.run(r.plan().args(["format", "--check"]).arg(&fx));
+    assert!(
+        !out.status.success(),
+        "check must be nonzero when a file would reformat"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("invalid-yaml.md"), "stderr: {stderr}");
+    assert!(stderr.contains("unclosed.md"), "stderr: {stderr}");
+    assert!(stderr.contains("valid-frontmatter.md"), "stderr: {stderr}");
+    assert!(
+        stderr.to_lowercase().contains("would"),
+        "stderr must report would-format/skipped: {stderr}"
+    );
+}
+
+#[test]
+fn general_md_format_write_preserves_frontmatter_and_wraps_body() {
+    let r = Root::new();
+    let fx = general_md_fixtures();
+    let dst = r.path().join("gmd-copy");
+    std::fs::create_dir_all(&dst).expect("create copy dir");
+    for entry in std::fs::read_dir(&fx).expect("read fixtures") {
+        let entry = entry.expect("dir entry");
+        std::fs::copy(entry.path(), dst.join(entry.file_name())).expect("copy fixture");
+    }
+
+    let invalid_before = std::fs::read(dst.join("invalid-yaml.md")).expect("read");
+    let unclosed_before = std::fs::read(dst.join("unclosed.md")).expect("read");
+    let valid_before = std::fs::read_to_string(dst.join("valid-frontmatter.md")).expect("read");
+
+    let out = r.run(r.plan().arg("format").arg(&dst));
+    assert!(
+        out.status.success(),
+        "format write must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let invalid_after = std::fs::read(dst.join("invalid-yaml.md")).expect("read");
+    let unclosed_after = std::fs::read(dst.join("unclosed.md")).expect("read");
+    let valid_after = std::fs::read_to_string(dst.join("valid-frontmatter.md")).expect("read");
+
+    assert_eq!(
+        invalid_before, invalid_after,
+        "invalid-yaml.md must be byte-identical"
+    );
+    assert_eq!(
+        unclosed_before, unclosed_after,
+        "unclosed.md must be byte-identical"
+    );
+    assert_ne!(
+        valid_before, valid_after,
+        "valid-frontmatter.md must change (body wrap)"
+    );
+
+    let fm_before = split_frontmatter(&valid_before).expect("frontmatter before");
+    let fm_after = split_frontmatter(&valid_after).expect("frontmatter after");
+    assert_eq!(
+        fm_before, fm_after,
+        "frontmatter must be preserved verbatim"
+    );
+
+    // Fixpoint: a second run is clean and changes nothing.
+    let out2 = r.run(r.plan().arg("format").arg(&dst));
+    assert!(
+        out2.status.success(),
+        "second format run must succeed: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+    let valid_after2 = std::fs::read_to_string(dst.join("valid-frontmatter.md")).expect("read");
+    assert_eq!(valid_after, valid_after2, "format must be idempotent");
+    let invalid_after2 = std::fs::read(dst.join("invalid-yaml.md")).expect("read");
+    assert_eq!(
+        invalid_before, invalid_after2,
+        "invalid must stay byte-identical"
+    );
+}
