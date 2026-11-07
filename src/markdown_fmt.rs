@@ -1496,7 +1496,6 @@ mod tests {
 
     #[test]
     fn unicode_width_counts_columns_not_bytes() {
-        use unicode_width::UnicodeWidthStr;
         let line = "x".repeat(78) + " —";
         assert_eq!(line.chars().count(), 80);
         assert_eq!(line.len(), 82);
