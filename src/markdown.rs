@@ -99,18 +99,6 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
             .unwrap_or(false)
     }
 
-    // Helper: trailing punctuation that glues to the preceding word.
-    // A line must never start with one of these (orphan prevention);
-    // the `](` link seam below is the deliberate exception (it may break
-    // for human readers) and is unaffected: seam words always contain
-    // non-punctuation, so the hold rule never fires on them.
-    fn is_trailing_punct(ch: char) -> bool {
-        matches!(
-            ch,
-            ',' | ';' | ':' | '!' | '?' | '.' | '%' | ')' | ']' | '}' | '>' | '…'
-        )
-    }
-
     // Helper: append a character to pending, merging with last piece if same style
     fn push_char(pending: &mut Vec<(String, Style)>, ch: char, style: Style) {
         if let Some(last) = pending.last_mut()
@@ -123,41 +111,12 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
         pending.push((ch.to_string(), style));
     }
 
-    // Flatten spans so lookahead can cross span boundaries (search
-    // highlighting splits words mid-word; the orphan rule must still see
-    // the upcoming word). Per-char style is preserved.
-    let flat: Vec<(char, Style)> = spans
-        .iter()
-        .flat_map(|s| {
-            let style = s.style;
-            s.content.chars().map(move |c| (c, style))
-        })
-        .collect();
+    for span in spans {
+        let text = span.content.as_ref();
+        let style = span.style;
 
-    let mut idx = 0usize;
-    while idx < flat.len() {
-        let (ch, style) = flat[idx];
-
-        if ch == ' ' {
-            // Orphan prevention, mirror of the opening-bracket hold below:
-            // if the upcoming word consists entirely of trailing
-            // punctuation, hold the space (and the word before it) so the
-            // punctuation flushes as one unit with its word instead of
-            // starting the next line. Requires pending to be non-empty:
-            // after a committed group (e.g. ") ;") there is nothing to
-            // glue to without reflow, so old behavior is kept there.
-            let mut j = idx + 1;
-            while j < flat.len() && flat[j].0 != ' ' {
-                j += 1;
-            }
-            let upcoming_all_punct =
-                j > idx + 1 && flat[idx + 1..j].iter().all(|(c, _)| is_trailing_punct(*c));
-            if upcoming_all_punct && !pending.is_empty() && !pending_ends_with_open(&pending) {
-                push_char(&mut pending, ' ', style);
-                idx += 1;
-                continue;
-            }
-            {
+        for ch in text.chars() {
+            if ch == ' ' {
                 // Space is always a break point
                 // First, commit any pending that shouldn't be held back
                 let pends_with_open = pending_ends_with_open(&pending);
@@ -180,39 +139,16 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
                     cur.push((" ".to_string(), style));
                     line_len += 1;
                 }
-            }
-        } else if ch == ']' && bracket_depth > 0 {
-            // Closing bracket while inside brackets - part of the group
-            push_char(&mut pending, ch, style);
-            bracket_depth -= 1;
-        } else if ch == ']' {
-            // Standalone ']' - could be start of '](' link syntax
-            push_char(&mut pending, ch, style);
-        } else if ch == '(' && pending.last().is_some_and(|last| last.0.ends_with(']')) {
-            // '(' immediately after ']' - this is '](' link syntax
-            // Commit pending up to and including ']', then start new group with '('
-            let plen = pending_len(&pending);
-            if line_len + plen > max && !cur.is_empty() {
-                out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
-                line_len = 0;
-            }
-            for piece in pending.drain(..) {
-                line_len += piece.0.len();
-                cur.push(piece);
-            }
-            // '(' starts the URL part - new bracket group
-            pending.push(("(".to_string(), style));
-            bracket_depth += 1;
-        } else if ch == '(' || ch == '[' {
-            // Opening bracket - increase depth, add to pending
-            push_char(&mut pending, ch, style);
-            bracket_depth += 1;
-        } else if ch == ')' && bracket_depth > 0 {
-            // Closing bracket inside group
-            push_char(&mut pending, ch, style);
-            bracket_depth -= 1;
-            // If we just closed the outermost bracket, check if we should commit
-            if bracket_depth == 0 {
+            } else if ch == ']' && bracket_depth > 0 {
+                // Closing bracket while inside brackets - part of the group
+                push_char(&mut pending, ch, style);
+                bracket_depth -= 1;
+            } else if ch == ']' {
+                // Standalone ']' - could be start of '](' link syntax
+                push_char(&mut pending, ch, style);
+            } else if ch == '(' && pending.last().is_some_and(|last| last.0.ends_with(']')) {
+                // '(' immediately after ']' - this is '](' link syntax
+                // Commit pending up to and including ']', then start new group with '('
                 let plen = pending_len(&pending);
                 if line_len + plen > max && !cur.is_empty() {
                     out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
@@ -222,12 +158,34 @@ fn wrap_spans(spans: &[Span<'static>], max: usize) -> Vec<Vec<Span<'static>>> {
                     line_len += piece.0.len();
                     cur.push(piece);
                 }
+                // '(' starts the URL part - new bracket group
+                pending.push(("(".to_string(), style));
+                bracket_depth += 1;
+            } else if ch == '(' || ch == '[' {
+                // Opening bracket - increase depth, add to pending
+                push_char(&mut pending, ch, style);
+                bracket_depth += 1;
+            } else if ch == ')' && bracket_depth > 0 {
+                // Closing bracket inside group
+                push_char(&mut pending, ch, style);
+                bracket_depth -= 1;
+                // If we just closed the outermost bracket, check if we should commit
+                if bracket_depth == 0 {
+                    let plen = pending_len(&pending);
+                    if line_len + plen > max && !cur.is_empty() {
+                        out.push(cur.drain(..).map(|(s, st)| Span::styled(s, st)).collect());
+                        line_len = 0;
+                    }
+                    for piece in pending.drain(..) {
+                        line_len += piece.0.len();
+                        cur.push(piece);
+                    }
+                }
+            } else {
+                // Regular character
+                push_char(&mut pending, ch, style);
             }
-        } else {
-            // Regular character
-            push_char(&mut pending, ch, style);
         }
-        idx += 1;
     }
 
     // Flush any remaining pending
@@ -444,16 +402,73 @@ pub fn display_width(s: &str) -> usize {
 /// wide char = 2, never splitting a char). Empty input -> `vec![""]`.
 /// Marker protection is intentionally omitted: `collect_text` does not preserve
 /// backtick/bracket markers, so cells are plain text.
+/// Trailing punctuation that must not start a wrapped line (orphan
+/// prevention). Used when hard-breaking overlong words in table cells,
+/// where breaks fall between characters with no space to break at: the
+/// break point backs up over a trailing-punctuation run so `hello;`
+/// never becomes `hello` / `;...`. Spaced runs (`word ;`) keep normal
+/// break behavior — gluing those would need reflow. The `](` link seam
+/// lives in `wrap_spans` and never reaches the hard-breaker as a unit.
+fn is_trailing_punct(ch: char) -> bool {
+    matches!(
+        ch,
+        ',' | ';' | ':' | '!' | '?' | '.' | '%' | ')' | ']' | '}' | '>' | '…'
+    )
+}
+
+fn char_width(ch: char) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    UnicodeWidthChar::width(ch).unwrap_or(0)
+}
+
+/// Hard-break an overlong word into `width`-column lines. Never starts a
+/// continuation line with trailing punctuation (see `is_trailing_punct`):
+/// the break backs up over the punct run instead, keeping box width
+/// intact. If the atom itself starts with punctuation there is nothing
+/// to glue to, so it is kept whole. Always makes progress.
+fn break_atom(word: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let chars: Vec<(char, usize)> = word.chars().map(|c| (c, char_width(c).max(1))).collect();
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let mut w = 0usize;
+        let mut end = start;
+        while end < chars.len() && w + chars[end].1 <= width {
+            w += chars[end].1;
+            end += 1;
+        }
+        if end == chars.len() {
+            lines.push(chars[start..].iter().map(|(c, _)| *c).collect());
+            break;
+        }
+        // Would break before chars[end]: back up over trailing punctuation
+        // so the next line never starts with an orphan, keeping line 1
+        // non-empty.
+        let mut cut = end;
+        while cut > start + 1 && is_trailing_punct(chars[cut].0) {
+            cut -= 1;
+        }
+        lines.push(chars[start..cut].iter().map(|(c, _)| *c).collect());
+        start = cut;
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Greedy whitespace wrap of a single table cell to `width` display columns.
+///
+/// Overlong words hard-break via `break_atom` (orphan-safe); empty input
+/// yields `vec![""]`. Marker protection is intentionally omitted:
+/// `collect_text` does not preserve backtick/bracket markers, so cells are
+/// plain text.
 pub fn wrap_cell(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let text = text.trim();
     if text.is_empty() {
         return vec![String::new()];
-    }
-
-    fn char_width(ch: char) -> usize {
-        use unicode_width::UnicodeWidthChar;
-        UnicodeWidthChar::width(ch).unwrap_or(0)
     }
 
     let mut lines: Vec<String> = Vec::new();
@@ -467,55 +482,33 @@ pub fn wrap_cell(text: &str, width: usize) -> Vec<String> {
                 cur.push_str(word);
                 cur_w = ww;
             } else {
-                // hard-break
-                if !cur.is_empty() {
-                    lines.push(std::mem::take(&mut cur));
-                    cur_w = 0;
+                // Overlong word on a fresh line: hard-break it, keeping
+                // the last piece as the open line.
+                let mut broken = break_atom(word, width);
+                if let Some(last) = broken.pop() {
+                    cur_w = display_width(&last);
+                    cur = last;
                 }
-                let mut chunk = String::new();
-                let mut cw = 0usize;
-                for ch in word.chars() {
-                    let cwch = char_width(ch).max(1);
-                    if cw > 0 && cw + cwch > width {
-                        lines.push(std::mem::take(&mut chunk));
-                        cw = 0;
-                    }
-                    chunk.push(ch);
-                    cw += cwch;
-                }
-                if !chunk.is_empty() {
-                    cur = chunk;
-                    cur_w = cw;
-                }
+                lines.extend(broken);
             }
+        } else if cur_w + 1 + ww <= width {
+            cur.push(' ');
+            cur.push_str(word);
+            cur_w += 1 + ww;
         } else {
-            if cur_w + 1 + ww <= width {
-                cur.push(' ');
+            lines.push(std::mem::take(&mut cur));
+            cur_w = 0;
+            if ww <= width {
                 cur.push_str(word);
-                cur_w += 1 + ww;
+                cur_w = ww;
             } else {
-                lines.push(std::mem::take(&mut cur));
-                cur_w = 0;
-                if ww <= width {
-                    cur.push_str(word);
-                    cur_w = ww;
-                } else {
-                    let mut chunk = String::new();
-                    let mut cw = 0usize;
-                    for ch in word.chars() {
-                        let cwch = char_width(ch).max(1);
-                        if cw > 0 && cw + cwch > width {
-                            lines.push(std::mem::take(&mut chunk));
-                            cw = 0;
-                        }
-                        chunk.push(ch);
-                        cw += cwch;
-                    }
-                    if !chunk.is_empty() {
-                        cur = chunk;
-                        cur_w = cw;
-                    }
+                // Overlong word after a flush: same hard-break path.
+                let mut broken = break_atom(word, width);
+                if let Some(last) = broken.pop() {
+                    cur_w = display_width(&last);
+                    cur = last;
                 }
+                lines.extend(broken);
             }
         }
     }
@@ -1032,50 +1025,8 @@ mod tests {
     }
 
     #[test]
-    fn wrap_semicolon_sticks_to_word() {
-        let spans = vec![Span::styled("aaa ; bbb ccc", Style::default())];
-        let wrapped = wrap_spans(&spans, 4);
-        let lines: Vec<String> = wrapped
-            .iter()
-            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
-            .collect();
-        for line in &lines {
-            assert!(
-                !line.trim_start().starts_with(';'),
-                "orphan ';' must not start a line, got: {line:?} in {lines:?}"
-            );
-        }
-        assert!(
-            lines.iter().any(|l| l.ends_with(';')),
-            "';' must stay glued to its word: {lines:?}"
-        );
-    }
-
-    #[test]
-    fn wrap_trailing_punctuation_sticks_to_word() {
-        // Same orphan rule for the rest of the trailing set (,:!?.)%(])}>
-        // plus ellipsis; each would otherwise strand at a line start.
-        for punct in [",", ":", "!", "?", ".", "%", ")", "]", "}", ">", "…", "..."] {
-            let text: &'static str = Box::leak(format!("aaa {punct} bbb ccc").into_boxed_str());
-            let spans = vec![Span::styled(text, Style::default())];
-            let wrapped = wrap_spans(&spans, 4);
-            let lines: Vec<String> = wrapped
-                .iter()
-                .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
-                .collect();
-            for line in &lines {
-                assert!(
-                    !line.trim_start().starts_with(punct),
-                    "orphan {punct:?} must not start a line, got: {line:?} in {lines:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn wrap_balanced_query_stays_whole() {
-        // ?hello? has no internal spaces, so it is one atom and must never
-        // split; the trailing rule additionally glues a spaced " ?".
+        // ?hello? has no internal spaces, so it is one atom and never splits.
         let spans = vec![Span::styled("say ?hello? loudly now", Style::default())];
         let wrapped = wrap_spans(&spans, 10);
         let lines: Vec<String> = wrapped
@@ -1085,6 +1036,60 @@ mod tests {
         assert!(
             lines.iter().any(|l| l.contains("?hello?")),
             "?hello? must stay whole: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_cell_hard_break_backs_up_over_trailing_punct() {
+        // "abcde;fgh" at width 5: a naive break lands right after "abcde"
+        // and would strand ";" at the next line start. The break must back
+        // up one char instead, keeping ";" glued to "e".
+        let out = crate::markdown::wrap_cell("abcde;fgh", 5);
+        assert_eq!(out, vec!["abcd".to_string(), "e;fgh".to_string()]);
+        for line in out.iter().skip(1) {
+            let first = line.chars().next().expect("continuation is non-empty");
+            assert!(
+                ![',', ';', ':', '!', '?', '.', '%', ')', ']', '}', '>', '…'].contains(&first),
+                "continuation must not start with orphan punctuation: {line:?}"
+            );
+        }
+        // Content is preserved across the break.
+        assert_eq!(out.concat(), "abcde;fgh");
+    }
+
+    #[test]
+    fn table_hard_break_never_orphans_punct() {
+        // 88-char atom with ";" at break position (width 60 -> col 57):
+        // naive hard-break strands ";" at a continuation start. The table
+        // must back the break up instead, keeping the box intact.
+        let atom = format!("{}hello;{}", "x".repeat(52), "y".repeat(30));
+        let md = format!("| T |\n| --- |\n| {} |\n", atom);
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, &md, 60, false);
+        let strs: Vec<String> = lines
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        use unicode_width::UnicodeWidthStr;
+        let table: Vec<&String> = strs
+            .iter()
+            .filter(|l| l.contains('│') || l.contains('┌') || l.contains('└'))
+            .collect();
+        assert!(!table.is_empty(), "expected table lines: {strs:?}");
+        for l in &table {
+            assert_eq!(l.width(), 60, "box must stay intact: {l:?}");
+            let content = l.trim_matches(|c| c == '│' || c == ' ').trim_start();
+            if let Some(first) = content.chars().next() {
+                assert!(
+                    ![',', ';', ':', '!', '?', '.', '%', ')', ']', '}', '>', '…'].contains(&first),
+                    "table continuation must not start with orphan: {l:?}"
+                );
+            }
+        }
+        // The glued pair survives on one line (not split across the break).
+        assert!(
+            table.iter().any(|l| l.contains("o;")),
+            "';' must stay glued to preceding char: {table:?}"
         );
     }
 
