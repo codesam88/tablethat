@@ -154,8 +154,10 @@ enum Commands {
     },
 
     /// Validate task frontmatter
-    Lint,
-
+    Lint {
+        /// File or directory to lint (default: .plan tree)
+        path: Option<PathBuf>,
+    },
     /// Format task markdown (frontmatter + body)
     Format {
         /// File or directory to format (default: .plan/*.md)
@@ -287,9 +289,36 @@ fn run(cli: Cli) -> Result<(), String> {
             tablethat_lib::plan::store::init_plan(&root);
             Ok(())
         }
-        Some(Commands::Lint) => {
+        Some(Commands::Lint { path }) => {
             let mut warnings = Vec::new();
-            match tablethat_lib::plan::lint::validate_all(&root, &mut warnings) {
+            let result = if let Some(p) = path {
+                if p.is_dir() {
+                    tablethat_lib::plan::lint::validate_dir(&p, &mut warnings)
+                } else if p.is_file() {
+                    tablethat_lib::plan::lint::validate_file(&p, &mut warnings)
+                } else {
+                    return Err(format!("{}: not a file or directory", p.display()));
+                }
+            } else if root.join(tablethat_lib::PLAN_DIR).is_dir() {
+                if tablethat_lib::resolve_file(
+                    &root,
+                    ".plan",
+                    ".schema.json",
+                    "schema.json",
+                    "plan",
+                )
+                .is_none()
+                {
+                    return Err(
+                        "error: no schema found (searched .plan/.schema.json, config dir, data dir)"
+                            .into(),
+                    );
+                }
+                tablethat_lib::plan::lint::validate_all(&root, &mut warnings)
+            } else {
+                tablethat_lib::plan::lint::validate_dir(&root, &mut warnings)
+            };
+            match result {
                 Ok(()) => {}
                 Err(errors) => {
                     let mut all = errors;
