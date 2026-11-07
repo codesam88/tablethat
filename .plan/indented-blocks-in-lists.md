@@ -1,5 +1,5 @@
 ---
-status: open
+status: done
 type: bug
 priority: medium
 area: backend
@@ -36,3 +36,14 @@ Exploration needed:
   in list item, code block in blockquote
 - Verify comrak handles these correctly on its own vs needing our
   intervention
+
+## Close-out (2026-11-07)
+
+Superseded by the splice-engine rewrite
+(`.plan/formatter-splice-engine.md`, done):
+`align_tables()`/`prefer_fenced()` no longer exist. Indented-table
+detection, quoted-table passthrough, and nested fenced-block
+preservation are covered by `markdown_fmt` tests
+(`nested_table_indent_preserved`, `quoted_table_left_untouched`,
+`nested_list_wraps_with_indent`, `blockquote_wrap_preserves_markers`,
+`multiline_code_span_never_split`).
