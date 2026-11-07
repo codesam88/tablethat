@@ -17,7 +17,7 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Repo root containing .plan (default: auto-detect)
+    /// Override .plan discovery (schema, task files)
     #[arg(short, long, global = true, value_name = "PATH")]
     root: Option<PathBuf>,
 
@@ -162,13 +162,13 @@ enum Commands {
     Format {
         /// File or directory to format (default: .plan/*.md)
         path: Option<PathBuf>,
-        /// Wrap width for markdown body (overrides format.width)
+        /// Wrap width for markdown body
         #[arg(short, long, value_name = "COLS")]
         width: Option<usize>,
-        /// Join short lines into flow before re-splitting (overrides format.reflow)
+        /// Join short lines into flow before re-splitting
         #[arg(long, overrides_with = "no_reflow")]
         reflow: bool,
-        /// Don't join short lines (overrides format.reflow)
+        /// Don't join short lines
         #[arg(long, overrides_with = "reflow")]
         no_reflow: bool,
         /// Report files that would change without writing

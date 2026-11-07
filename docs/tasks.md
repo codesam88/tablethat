@@ -64,7 +64,7 @@ Allowed values:
 - **Complete:** set `status: done` when finished. Do not delete the file.
 - **Delete:** `plan delete <slug>` (alias `d`) removes the file. Supports
   fuzzy slug matching.
-- **Validate:** `plan lint` to check; `plan format [PATH]` to auto-fix
+- **Validate:** `plan lint [PATH]` to check; `plan format [PATH]` to auto-fix
   (file or directory; default `.plan/*.md`). The pre-commit hook runs
   `format` automatically.
 - **Init:** `plan init` scaffolds `.plan/` with schema and template.
@@ -95,5 +95,5 @@ q/Ctrl-C to abort).
 - Create tasks by copying `.plan/.TEMPLATE.md` to `.plan/<slug>.md` and
   follow its contained instructions.
 - Set `status: blocked` and note the blocker in the body.
-- Run `plan lint` to check and `plan format` to auto-format.
+- Run `plan lint [PATH]` to check and `plan format` to auto-format.
 - Append progress notes newest first; do not rewrite history.
