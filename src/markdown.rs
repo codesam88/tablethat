@@ -591,10 +591,26 @@ fn render_table(
     // Natural-start: size to content, never stretch.
     let mut col_w: Vec<usize> = cols.iter().map(|c| c.natural.max(c.min).max(1)).collect();
 
-    // Shrink-only: if content overflows the budget, shrink columns proportionally
-    // down to their minima. Never grow, never fill slack.
-    // Each round either fits the budget or pins at least one column at its min,
-    // so at most `ncols` rounds terminate (flex excludes pinned columns).
+    // Shrink-only: if content overflows the budget, shrink columns
+    // proportionally toward per-column floors. Never grow, never fill slack.
+    // Soft floor = longest word (keeps common words whole). If even soft
+    // floors overflow the budget (long unbreakable tokens), drop every floor
+    // to HARD_MIN_COLUMNS: hard-break keeps every character visible, while
+    // an overflowing box would hide the right border. Overflow is accepted
+    // only below the hard floor. Each round either fits the budget or pins
+    // at least one column at its floor, so at most `ncols` rounds terminate
+    // (flex excludes pinned columns).
+    const HARD_MIN_COLUMNS: usize = 4;
+    let soft: Vec<usize> = cols.iter().map(|c| c.min).collect();
+    let soft_total: usize = soft.iter().sum::<usize>();
+    // Floors apply uniformly: either every column keeps its soft floor, or
+    // (when soft floors alone overflow) every column may squeeze to the
+    // hard floor, never below its own soft floor if that is already tiny.
+    let floor: Vec<usize> = if soft_total + border_w > table_hi {
+        soft.iter().map(|&m| m.min(HARD_MIN_COLUMNS)).collect()
+    } else {
+        soft
+    };
     for _ in 0..ncols {
         if col_w.iter().sum::<usize>() <= target {
             break;
@@ -602,33 +618,33 @@ fn render_table(
         let deficit = col_w.iter().sum::<usize>().saturating_sub(target);
         let flex: usize = col_w
             .iter()
-            .zip(&cols)
-            .map(|(&w, c)| w.saturating_sub(c.min))
+            .zip(&floor)
+            .map(|(&w, &f)| w.saturating_sub(f))
             .sum();
         if flex == 0 {
-            // All columns at min: mins win; table may overflow budget (accepted).
+            // All columns at floor: floors win; table may overflow budget
+            // (accepted).
             break;
         }
         col_w = col_w
             .iter()
             .enumerate()
             .map(|(i, &w)| {
-                let room = w.saturating_sub(cols[i].min);
-                w.saturating_sub(deficit * room / flex.max(1))
-                    .max(cols[i].min)
+                let room = w.saturating_sub(floor[i]);
+                w.saturating_sub(deficit * room / flex.max(1)).max(floor[i])
             })
             .collect();
     }
 
     // Floor dust: integer division can leave every cut at zero while the
     // table is still over budget (e.g. deficit 1 against flex 30). Shave
-    // the remainder off the widest above-minimum columns one cell at a
-    // time so the total lands exactly on budget and the right border
-    // never spills into the scrollbar gap. Terminates: each step shrinks
-    // the sum; stops at all-minimum (accepted overflow, same as above).
+    // the remainder off the widest above-floor columns one cell at a time
+    // so the total lands exactly on budget and the right border never
+    // spills into the scrollbar gap. Terminates: each step shrinks the
+    // sum; stops at all-floor (accepted overflow, same as above).
     while col_w.iter().sum::<usize>() > target {
         let Some(i) = (0..ncols)
-            .filter(|&j| col_w[j] > cols[j].min)
+            .filter(|&j| col_w[j] > floor[j])
             .max_by_key(|&j| col_w[j])
         else {
             break;
@@ -928,9 +944,11 @@ mod tests {
     // T2. Content overflow shrinks proportionally to the exact budget:
     //     when natural width exceeds the budget, columns shrink toward
     //     their minima in proportion to their spare room.
-    // T3. Min floor wins with accepted overflow: once every column is at
-    //     its minimum and the table still exceeds the budget, the minimums
-    //     win and the table may overflow (box stays intact).
+    // T3. Soft floors yield to the budget: columns shrink proportionally
+    //     toward their soft floors (longest word); if soft floors alone
+    //     still overflow, every floor drops to min(soft, 4) and shrinking
+    //     continues (hard-break keeps content visible). Overflow is
+    //     accepted only below the hard floor.
     // T4. Cells wrap to column width: each cell's text is greedy-wrapped
     //     (wrap_cell) to its computed column width, including hard-break
     //     of overlong words via break_atom.
@@ -1612,6 +1630,29 @@ mod tests {
         assert!(!widths.is_empty(), "expected table lines");
         for w in &widths {
             assert_eq!(*w, 80, "shrink dust must not overflow budget");
+        }
+    }
+
+    #[test]
+    fn table_soft_floor_overflow_squeezes_to_hard_floor() {
+        // Soft mins [20, 39] alone overflow a width-60 budget (64 total).
+        // Floors must drop to hard (4) so the box still fits exactly.
+        let md = "| aaaaaaaaaaaaaaaaaaaa b | ccccccccccccccccccccccccccccccccccccccc d |\n|---|---|\n| x | y |\n";
+        let th = theme_from_cfg(&crate::ThemeConfig::default());
+        let lines = render_markdown(&th, md, 60, false);
+        let strs: Vec<String> = lines
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        use unicode_width::UnicodeWidthStr;
+        let widths: Vec<usize> = strs
+            .iter()
+            .filter(|l| l.contains('│') || l.contains('┌') || l.contains('└'))
+            .map(|l| l.width())
+            .collect();
+        assert!(!widths.is_empty(), "expected table lines");
+        for w in &widths {
+            assert_eq!(*w, 60, "soft-floor overflow must still fit budget");
         }
     }
 
