@@ -75,7 +75,7 @@ fn splice_format(text: &str, width: usize, reflow: bool) -> String {
         if cand.start < 1 || cand.end > lines.len() || cand.start > cand.end {
             continue;
         }
-        let has_overlong = (cand.start..=cand.end).any(|ln| lines[ln - 1].len() > width);
+        let has_overlong = (cand.start..=cand.end).any(|ln| display_width(lines[ln - 1]) > width);
         if !reflow && !has_overlong {
             continue;
         }
@@ -480,14 +480,14 @@ fn wrap_atoms(atoms: &[(String, bool)], max_width: usize) -> Vec<String> {
     let mut chunks: Vec<(String, usize, bool)> = Vec::new(); // (text, len, space_before)
     for (i, (atom, space_before)) in atoms.iter().enumerate() {
         if i == 0 || !would_start_block(atom) {
-            chunks.push((atom.clone(), atom.len(), *space_before));
+            chunks.push((atom.clone(), display_width(atom), *space_before));
         } else if let Some((text, len, _)) = chunks.last_mut() {
             if *space_before {
                 text.push(' ');
                 *len += 1;
             }
             text.push_str(atom);
-            *len += atom.len();
+            *len += display_width(atom);
         }
     }
     let mut lines = Vec::new();
@@ -570,7 +570,7 @@ fn render_wrap(
                 continue;
             }
 
-            if line.len() <= width {
+            if display_width(line) <= width {
                 if is_hardbreak {
                     out.push(line.to_string());
                 } else {
@@ -633,8 +633,8 @@ fn render_wrap(
                 continue;
             }
 
-            let max_content_width = if width > pfx.len() + marker_str.len() {
-                width - pfx.len() - marker_str.len()
+            let max_content_width = if width > display_width(&pfx) + display_width(marker_str) {
+                width - display_width(&pfx) - display_width(marker_str)
             } else {
                 0
             };
@@ -836,8 +836,8 @@ fn render_wrap(
             ""
         };
 
-        let max_content_width = if width > pfx.len() + unit_marker.len() {
-            width - pfx.len() - unit_marker.len()
+        let max_content_width = if width > display_width(&pfx) + display_width(unit_marker) {
+            width - display_width(&pfx) - display_width(unit_marker)
         } else {
             0
         };
@@ -988,6 +988,11 @@ fn align_table_lines(lines: &[&str]) -> Vec<String> {
         out.push(format!("{}{}", indents[row_idx], line));
     }
     out
+}
+
+fn display_width(s: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    s.width()
 }
 
 #[cfg(test)]
@@ -1487,5 +1492,54 @@ mod tests {
         }
         html_eq(&s, &out);
         assert_eq!(splice_format(&out, 80, true), out, "reflow fixpoint");
+    }
+
+    #[test]
+    fn unicode_width_counts_columns_not_bytes() {
+        use unicode_width::UnicodeWidthStr;
+        let line = "x".repeat(78) + " —";
+        assert_eq!(line.chars().count(), 80);
+        assert_eq!(line.len(), 82);
+        let s = format!("{}\n", line);
+        let out = splice_format(&s, 80, false);
+        assert_eq!(out, s, "80-column unicode line must be left alone: {out:?}");
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 80, false), out, "fixpoint");
+    }
+
+    #[test]
+    fn unicode_overlong_still_wraps() {
+        use unicode_width::UnicodeWidthStr;
+        let s = format!("{}\n", "— ".repeat(50).trim_end());
+        let out = splice_format(&s, 80, false);
+        assert!(out.lines().count() > 1, "should wrap: {out:?}");
+        for line in out.lines() {
+            assert!(
+                UnicodeWidthStr::width(line) <= 80,
+                "line too wide: {:?} ({} cols)",
+                line,
+                UnicodeWidthStr::width(line)
+            );
+        }
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 80, false), out, "fixpoint");
+    }
+
+    #[test]
+    fn cjk_wraps_by_display_width() {
+        use unicode_width::UnicodeWidthStr;
+        let s = format!("{}\n", "字 ".repeat(50).trim_end());
+        let out = splice_format(&s, 80, false);
+        assert!(out.lines().count() > 1, "should wrap: {out:?}");
+        for line in out.lines() {
+            assert!(
+                UnicodeWidthStr::width(line) <= 80,
+                "line too wide: {:?} ({} cols)",
+                line,
+                UnicodeWidthStr::width(line)
+            );
+        }
+        html_eq(&s, &out);
+        assert_eq!(splice_format(&out, 80, false), out, "fixpoint");
     }
 }
