@@ -19,7 +19,15 @@ fn normalize_frontmatter(content: &str, width: usize, reflow: bool) -> Result<St
 
     for &key in CANONICAL_ORDER {
         if let Some(val) = obj.get(key) {
-            lines.push(format!("{}: {}", key, value_to_yaml_str(val)));
+            let v = value_to_yaml_str(val);
+            if v.contains('\n') {
+                lines.push(format!("{key}:"));
+                for l in v.lines() {
+                    lines.push(l.to_string());
+                }
+            } else {
+                lines.push(format!("{key}: {v}"));
+            }
         }
     }
 
@@ -28,7 +36,15 @@ fn normalize_frontmatter(content: &str, width: usize, reflow: bool) -> Result<St
         if CANONICAL_ORDER.contains(&k) {
             continue;
         }
-        lines.push(format!("{k}: {}", value_to_yaml_str(val)));
+        let v = value_to_yaml_str(val);
+        if v.contains('\n') {
+            lines.push(format!("{k}:"));
+            for l in v.lines() {
+                lines.push(l.to_string());
+            }
+        } else {
+            lines.push(format!("{k}: {v}"));
+        }
     }
 
     lines.push("---".into());
@@ -72,8 +88,61 @@ fn format_markdown_body(body: &str, width: usize, reflow: bool) -> String {
     markdown_fmt::format_commonmark(body, width, reflow)
 }
 
-/// Format one file in place. Returns whether the file changed;
+/// Whether a parsed frontmatter mapping looks like a task file (has at least one
+/// canonical task field). Task-shaped files get canonical field reordering;
+/// everything else is treated as general markdown and preserved verbatim.
+fn is_task_frontmatter(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+    const CANONICAL: &[&str] = &["status", "type", "priority", "area"];
+    CANONICAL.iter().any(|k| obj.contains_key(*k))
+}
+
+/// General-markdown normalization: frontmatter bytes are preserved verbatim,
+/// only the body goes through `format_commonmark`. Returns the full markdown.
+fn normalize_general(content: &str, width: usize, reflow: bool) -> Result<String, String> {
+    let (fml, start) = parse_frontmatter(content).map_err(|e| e.clone())?;
+
+    // Validate YAML parses and is a mapping; otherwise caller skips.
+    let parsed: serde_json::Value =
+        serde_saphyr::from_str(&fml).map_err(|e| format!("YAML parse error: {e}"))?;
+    if !parsed.is_object() {
+        return Err("frontmatter must be a YAML mapping".into());
+    }
+
+    let mut lines: Vec<String> = vec!["---".into()];
+    for l in fml.split('\n') {
+        lines.push(l.to_string());
+    }
+    lines.push("---".into());
+
+    // Body handling mirrors normalize_frontmatter.
+    let line_before_body = content
+        .lines()
+        .enumerate()
+        .skip(start)
+        .find(|(_, l)| l.trim() == "---")
+        .map(|(i, _)| i);
+
+    if let Some(body_start) = line_before_body {
+        let rest: Vec<&str> = content.lines().skip(body_start + 1).collect();
+        let body = rest.join("\n");
+        let formatted = format_markdown_body(&body, width, reflow);
+        let trimmed = formatted.trim();
+        if !trimmed.is_empty() {
+            lines.push(String::new());
+            lines.push(trimmed.to_string());
+        }
+    }
+
+    Ok(lines.join("\n") + "\n")
+}
+
+/// Format one task/general file in place. Returns whether the file changed;
 /// failures are `Err` strings for the caller to present.
+///
+/// Task-shaped frontmatter (contains a canonical task field) is normalized with
+/// canonical field ordering. General frontmatter is preserved verbatim. A file
+/// whose frontmatter does not YAML-parse is skipped with a warning and
+/// `Ok(false)` (file left untouched).
 pub fn format_file(
     path: &std::path::Path,
     width: usize,
@@ -84,10 +153,103 @@ pub fn format_file(
         .map_err(|e| format!("{}: cannot read — {e}", path.display()))?;
 
     let formatted = if path.extension().is_some_and(|ext| ext == "md") {
-        // Check if file has frontmatter
         if content.trim_start().starts_with("---") {
-            normalize_frontmatter(&content, width, reflow)
-                .map_err(|e| format!("{}: cannot normalize — {e}", path.display()))?
+            // Split frontmatter; a split failure is a hard error (task contract).
+            let (fml, _) = match parse_frontmatter(&content) {
+                Ok(v) => v,
+                Err(e) => return Err(format!("{}: cannot normalize — {e}", path.display())),
+            };
+            // Invalid YAML or non-mapping: skip with warning, leave bytes untouched.
+            match serde_saphyr::from_str::<serde_json::Value>(&fml) {
+                Err(_) => {
+                    eprintln!("{}: WARNING — invalid frontmatter, skipped", path.display());
+                    return Ok(false);
+                }
+                Ok(parsed) => {
+                    if parsed.as_object().map(is_task_frontmatter).unwrap_or(false) {
+                        normalize_frontmatter(&content, width, reflow)
+                            .map_err(|e| format!("{}: cannot normalize — {e}", path.display()))?
+                    } else if parsed.is_object() {
+                        // Non-task mapping: preserve frontmatter verbatim.
+                        match normalize_general(&content, width, reflow) {
+                            Ok(n) => n,
+                            Err(e) => {
+                                // Non-mapping or parse failure -> skip.
+                                eprintln!(
+                                    "{}: WARNING — invalid frontmatter, skipped",
+                                    path.display()
+                                );
+                                let _ = e;
+                                return Ok(false);
+                            }
+                        }
+                    } else {
+                        eprintln!("{}: WARNING — invalid frontmatter, skipped", path.display());
+                        return Ok(false);
+                    }
+                }
+            }
+        } else {
+            format_markdown_body(&content, width, reflow)
+        }
+    } else {
+        format_markdown_body(&content, width, reflow)
+    };
+
+    if formatted != content {
+        if check {
+            return Ok(true);
+        }
+        std::fs::write(path, &formatted)
+            .map_err(|e| format!("{}: cannot write — {e}", path.display()))?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// General-markdown format entry point: never reorders or re-serializes
+/// frontmatter; frontmatter bytes are preserved verbatim and only the body is
+/// formatted. Invalid/unparseable/non-mapping frontmatter is skipped with a
+/// warning and `Ok(false)` (file left untouched).
+pub fn format_general_file(
+    path: &std::path::Path,
+    width: usize,
+    reflow: bool,
+    check: bool,
+) -> Result<bool, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("{}: cannot read — {e}", path.display()))?;
+
+    let formatted = if path.extension().is_some_and(|ext| ext == "md") {
+        if content.trim_start().starts_with("---") {
+            // Split; failure -> skip.
+            let (fml, _) = match parse_frontmatter(&content) {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("{}: WARNING — invalid frontmatter, skipped", path.display());
+                    return Ok(false);
+                }
+            };
+            // YAML parse or non-mapping -> skip.
+            let parsed: Result<serde_json::Value, _> = serde_saphyr::from_str(&fml);
+            match parsed {
+                Err(_) => {
+                    eprintln!("{}: WARNING — invalid frontmatter, skipped", path.display());
+                    return Ok(false);
+                }
+                Ok(v) if !v.is_object() => {
+                    eprintln!("{}: WARNING — invalid frontmatter, skipped", path.display());
+                    return Ok(false);
+                }
+                Ok(_) => {}
+            }
+            match normalize_general(&content, width, reflow) {
+                Ok(n) => n,
+                Err(_) => {
+                    eprintln!("{}: WARNING — invalid frontmatter, skipped", path.display());
+                    return Ok(false);
+                }
+            }
         } else {
             format_markdown_body(&content, width, reflow)
         }
@@ -294,5 +456,90 @@ mod tests {
             normalize_all(root, 80, false, false).expect("idempotent"),
             0
         );
+    }
+
+    #[test]
+    fn general_frontmatter_verbatim_preserved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("doc.md");
+        let content = "---\ntitle: Hello\nlanguage_tabs:\n  - shell: Shell\n  - http: HTTP\n# a comment\nfoo: bar\n---\n\n# Heading\n\nThis body line is deliberately padded well beyond eighty columns so the formatter splits it.\n";
+        std::fs::write(&path, content).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        let (before_fm, _) = parse_frontmatter(&before).unwrap();
+        format_file(&path, 80, false, false).expect("formats");
+        let after = std::fs::read_to_string(&path).unwrap();
+        let (after_fm, _) = parse_frontmatter(&after).unwrap();
+        assert_eq!(before_fm, after_fm, "general frontmatter must be verbatim");
+        assert_ne!(before, after, "body must be formatted");
+    }
+
+    #[test]
+    fn no_corrupt_multiline_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("doc.md");
+        let content =
+            "---\ntitle: Foo\nlanguage_tabs:\n  - shell: Shell\n  - http: HTTP\n---\n\nbody\n";
+        std::fs::write(&path, content).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        let (before_fm, _) = parse_frontmatter(&before).unwrap();
+        let before_val: serde_json::Value = serde_saphyr::from_str(&before_fm).unwrap();
+        format_file(&path, 80, false, false).expect("formats");
+        let after = std::fs::read_to_string(&path).unwrap();
+        let (after_fm, _) = parse_frontmatter(&after).unwrap();
+        let after_val: serde_json::Value = serde_saphyr::from_str(&after_fm)
+            .expect("frontmatter must still parse after formatting");
+        assert_eq!(
+            before_val, after_val,
+            "frontmatter value must survive formatting"
+        );
+    }
+
+    #[test]
+    fn slate_invalid_yaml_is_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("doc.md");
+        let content = "---\nlanguage_tabs: - shell: Shell\n---\n\nbody\n";
+        std::fs::write(&path, content).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let res = format_file(&path, 80, false, false);
+        assert!(
+            res.is_ok(),
+            "invalid frontmatter must not hard-error: {res:?}"
+        );
+        assert!(!res.unwrap(), "skipped file reports unchanged");
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(before, after, "skipped file must be byte-identical");
+    }
+
+    #[test]
+    fn multiline_value_block_emit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("task.md");
+        let content =
+            "---\nstatus: open\ntype: bug\npriority: high\ncustom:\n  - a\n  - b\n---\n\nbody\n";
+        std::fs::write(&path, content).unwrap();
+        format_file(&path, 80, false, false).expect("formats");
+        let after = std::fs::read_to_string(&path).unwrap();
+        let (fm, _) = parse_frontmatter(&after).unwrap();
+        let val: serde_json::Value = serde_saphyr::from_str(&fm).expect("parses");
+        assert_eq!(val["custom"], serde_json::json!(["a", "b"]));
+        // Fixpoint.
+        std::fs::write(&path, after.clone()).unwrap();
+        format_file(&path, 80, false, false).expect("second pass");
+        let second = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(after, second, "must be idempotent");
+    }
+
+    #[test]
+    fn general_frontmatter_format_fixpoint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("doc.md");
+        let content = "---\ntitle: Foo\nlanguage_tabs:\n  - shell: Shell\n  - http: HTTP\n---\n\n# Heading\n\nThis   is   spaced.\n";
+        std::fs::write(&path, content).unwrap();
+        format_file(&path, 80, false, false).expect("first pass");
+        let first = std::fs::read_to_string(&path).unwrap();
+        format_file(&path, 80, false, false).expect("second pass");
+        let second = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(first, second, "formatting must be idempotent");
     }
 }

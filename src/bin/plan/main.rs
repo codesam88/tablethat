@@ -353,12 +353,23 @@ fn run(cli: Cli) -> Result<(), String> {
                         let mut errors: Vec<String> = Vec::new();
                         let mut would_change = 0usize;
                         for entry in &entries {
-                            match tablethat_lib::plan::format::format_file(
-                                entry,
-                                effective_width,
-                                effective_reflow,
-                                check,
-                            ) {
+                            let is_task = entry.components().any(|c| c.as_os_str() == ".plan");
+                            let fmt_res = if is_task {
+                                tablethat_lib::plan::format::format_file(
+                                    entry,
+                                    effective_width,
+                                    effective_reflow,
+                                    check,
+                                )
+                            } else {
+                                tablethat_lib::plan::format::format_general_file(
+                                    entry,
+                                    effective_width,
+                                    effective_reflow,
+                                    check,
+                                )
+                            };
+                            match fmt_res {
                                 Ok(true) => {
                                     if check {
                                         eprintln!("would format {}", entry.display());
@@ -379,12 +390,23 @@ fn run(cli: Cli) -> Result<(), String> {
                         }
                         Ok(())
                     } else if p.is_file() {
-                        match tablethat_lib::plan::format::format_file(
-                            &p,
-                            effective_width,
-                            effective_reflow,
-                            check,
-                        ) {
+                        let is_task = p.components().any(|c| c.as_os_str() == ".plan");
+                        let fmt_res = if is_task {
+                            tablethat_lib::plan::format::format_file(
+                                &p,
+                                effective_width,
+                                effective_reflow,
+                                check,
+                            )
+                        } else {
+                            tablethat_lib::plan::format::format_general_file(
+                                &p,
+                                effective_width,
+                                effective_reflow,
+                                check,
+                            )
+                        };
+                        match fmt_res {
                             Ok(true) => {
                                 if check {
                                     return Err(format!("{}: would be reformatted", p.display()));
