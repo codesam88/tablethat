@@ -1011,24 +1011,20 @@ mod tests {
     fn table_renders_header_and_body() {
         let md = "| **Name** | `Code` |\n|---|---|\n| foo | bar |\n";
         let th = theme_from_cfg(&crate::ThemeConfig::default());
-        let lines = render_markdown(&th, md, 80, false);
-        let total: String = lines
+        let lines: Vec<String> = render_markdown(&th, md, 80, false)
             .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
             .collect();
-        assert!(total.contains("Name"), "Missing header 'Name'");
-        assert!(total.contains("foo"), "Missing body 'foo'");
-        // Representative glyphs per class (corner/vertical/fill) only.
-        for ch in ['┌', '│', '─', '━'] {
-            assert!(total.contains(ch), "Missing border char {:?}", ch);
-        }
-        assert!(total.contains("Name"), "Missing header 'Name'");
-        assert!(total.contains("foo"), "Missing body 'foo'");
-        assert!(!total.contains('═'), "Double separator must be absent");
-        // Unicode mode must not use ASCII pipes/corners.
-        assert!(
-            !total.contains('+'),
-            "ascii corner must not render in unicode mode"
+        assert_eq!(
+            lines,
+            vec![
+                "┌─────┬─────┐".to_string(),
+                "│ Name│ Code│".to_string(),
+                "┝━━━━━┿━━━━━┥".to_string(),
+                "│ foo │ bar │".to_string(),
+                "└─────┴─────┘".to_string(),
+                "".to_string(),
+            ]
         );
     }
 
@@ -1036,20 +1032,20 @@ mod tests {
     fn table_renders_header_and_body_ascii() {
         let md = "| **Name** | `Code` |\n|---|---|\n| foo | bar |\n";
         let th = theme_from_cfg(&crate::ThemeConfig::default());
-        let lines = render_markdown(&th, md, 80, true);
-        let total: String = lines
+        let lines: Vec<String> = render_markdown(&th, md, 80, true)
             .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
             .collect();
-        assert!(total.contains("Name"), "Missing header 'Name'");
-        assert!(total.contains("foo"), "Missing body 'foo'");
-        assert!(total.contains("+"), "Missing ascii corner/junction");
-        assert!(total.contains("="), "Missing separator");
-        assert!(total.contains("|"), "Missing vertical");
-        // ASCII mode must not use unicode corners.
-        assert!(
-            !total.contains('┌'),
-            "unicode corner must not render in ascii mode"
+        assert_eq!(
+            lines,
+            vec![
+                "+-----+-----+".to_string(),
+                "| Name| Code|".to_string(),
+                "+=====+=====+".to_string(),
+                "| foo | bar |".to_string(),
+                "+-----+-----+".to_string(),
+                "".to_string(),
+            ]
         );
     }
 
@@ -2624,7 +2620,8 @@ mod tests {
                 let joined = strs.join("\n");
                 assert!(joined.contains("o;"), "P8 glued pair missing: {strs:?}");
             }
-            // T3 overflow
+            // T3 min floor: soft mins hold and the table shrinks to fit
+            // (here the 60 floor); box integrity and content hold throughout.
             {
                 let long = "abcdefghijklmnopqrstuvwxyz".repeat(3);
                 let md = format!("| a | {} |\n|---|---|\n| x | y |\n", long);
