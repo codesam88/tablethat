@@ -7,10 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] – 2026-11-08
+
+### Added
+
+- `plan format [PATH]` with `--width/-w COLS`, `--reflow`/`--no-reflow`,
+  and `--check` dry-run; `[format]` section in config (reflow on by default)
+- `plan lint [PATH]`: lint a single file or a foreign directory; without a
+  schema it warns and runs structural checks only
+- `plan format` on general markdown: foreign frontmatter preserved
+  byte-verbatim, unparseable frontmatter skipped with a warning
+- Viewer width policy for `gloss`: base width from `-w` or live terminal
+  width minus chrome; prose clamped to 40–120 columns, tables to 60–160
+- Tables in the viewer wrap cell text instead of truncating (compact tables
+  stay compact; overlong words hard-break with orphan protection)
+- Unicode display-width measurement in formatter and viewer (CJK/em dash
+  wrap and align correctly)
+- Unicode table borders in gloss with `--ascii` fallback
+- List description terms highlighted in inline-code color bold
+- `plan list`: `l:limit` (slug) vs `/`: (fulltext) search split
+- Rolling release channel: floating `head` prerelease rebuilt from green
+  main; version tags stay stable
+
 ### Changed
 
-- Formatter rewritten as conservative splice engine (80-col split-only wrap, lossless tables)
-- `format.reflow` (default true) joins short lines into flow before re-splitting; `[format]` section in `Config`
+- Formatter rewritten as conservative splice engine (split-only wrap,
+  hardbreak-exempt whitespace strip, AST-ranged table alignment,
+  idempotent output)
+- Hide-done toggle rebound from `h` to `H` (frees hjkl navigation)
+- TUI no longer swallows event/draw errors; transient resize interrupts
+  are retried
+
+### Fixed
+
+- Right table border overlapping the scrollbar gap (content width now
+  accounts for the left pad)
+- Tables one column too wide from shrink integer-division residue, and
+  long-token columns overflowing small budgets (soft floors yield to a
+  hard floor of 4)
+- `plan format` corrupting multi-line YAML frontmatter (inline re-emit
+  dedented block sequences); values now block-emit
+- arm64 nfpm packaging used the wrong arch name; rolling version now
+  derives from the last stable release
 
 ## [0.1.1] – 2026-11-01
 
