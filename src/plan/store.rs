@@ -15,6 +15,33 @@ pub fn sorted_md_entries(dir: &std::path::Path) -> Result<Vec<PathBuf>, String> 
     Ok(v)
 }
 
+/// Expand a list of format targets (files and/or directories) into a sorted,
+/// deduplicated list of markdown files. Directory entries come from
+/// `sorted_md_entries`. Read errors for a directory and non-file/non-dir
+/// inputs are collected into the returned error vector instead of aborting.
+pub fn expand_format_targets(paths: &[PathBuf]) -> (Vec<PathBuf>, Vec<String>) {
+    let mut targets: Vec<PathBuf> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for p in paths {
+        if p.is_dir() {
+            match sorted_md_entries(p) {
+                Ok(entries) => targets.extend(entries),
+                Err(e) => errors.push(e),
+            }
+        } else if p.is_file() {
+            targets.push(p.clone());
+        } else {
+            errors.push(format!("{}: not a file or directory", p.display()));
+        }
+    }
+    // Dedupe while preserving sorted order.
+    let unique: Vec<PathBuf> = {
+        let set: std::collections::BTreeSet<PathBuf> = targets.into_iter().collect();
+        set.into_iter().collect()
+    };
+    (unique, errors)
+}
+
 /// List `.md` task files in a directory, sorted, excluding `.TEMPLATE.md`.
 pub fn read_task_files(tasks_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
     match std::fs::read_dir(tasks_dir) {
@@ -484,5 +511,47 @@ mod entries_tests {
         let missing = tmp.path().join("nope");
         let err = sorted_md_entries(&missing).expect_err("missing dir must error");
         assert!(err.contains("nope"), "error names the dir: {err}");
+    }
+
+    #[test]
+    fn expand_format_targets_expands_dir_and_dedupes() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["a.md", "b.md"] {
+            std::fs::write(tmp.path().join(name), "x").unwrap();
+        }
+        let dir = tmp.path().to_path_buf();
+        let file = dir.join("a.md");
+        let (targets, errors) = super::expand_format_targets(&[dir.clone(), file.clone()]);
+        assert!(errors.is_empty(), "no errors: {errors:?}");
+        let names: Vec<String> = targets
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["a.md", "b.md"], "deduped + sorted");
+    }
+
+    #[test]
+    fn expand_format_targets_reports_missing_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "x").unwrap();
+        let missing = tmp.path().join("nope");
+        let (targets, errors) =
+            super::expand_format_targets(&[missing.clone(), tmp.path().to_path_buf()]);
+        assert!(!errors.is_empty(), "missing path must error");
+        assert!(
+            errors.iter().any(|e| e.contains("nope")),
+            "error names missing path: {errors:?}"
+        );
+        assert_eq!(targets.len(), 1, "readable dir still expands");
+    }
+
+    #[test]
+    fn expand_format_targets_unreadable_dir_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing_dir = tmp.path().join("nope");
+        let (targets, errors) = super::expand_format_targets(&[missing_dir.clone()]);
+        assert!(targets.is_empty());
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("nope"));
     }
 }

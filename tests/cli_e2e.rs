@@ -694,3 +694,103 @@ fn general_md_format_write_preserves_frontmatter_and_wraps_body() {
         "invalid must stay byte-identical"
     );
 }
+
+#[test]
+fn format_multiple_files_one_invocation() {
+    let r = Root::new();
+    assert!(r.run(r.plan().arg("init")).status.success());
+    assert!(r.run(r.plan().args(["add", "multi-a"])).status.success());
+    assert!(r.run(r.plan().args(["add", "multi-b"])).status.success());
+
+    let scrambled = "---\npriority: high\nstatus: open\ntype: bug\n---\n\nbody\n";
+    std::fs::write(r.task_path("multi-a"), scrambled).expect("write");
+    std::fs::write(r.task_path("multi-b"), scrambled).expect("write");
+
+    let out = r.run(
+        r.plan()
+            .arg("format")
+            .arg(r.task_path("multi-a"))
+            .arg(r.task_path("multi-b")),
+    );
+    assert!(
+        out.status.success(),
+        "formatting two files must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    for slug in ["multi-a", "multi-b"] {
+        let text = std::fs::read_to_string(r.task_path(slug)).expect("read");
+        let pos = |key: &str| text.find(&format!("\n{key}:")).unwrap_or(usize::MAX);
+        assert!(pos("status") < pos("type"), "fields reordered for {slug}");
+    }
+}
+
+#[test]
+fn format_mixed_file_and_directory() {
+    let r = Root::new();
+    assert!(r.run(r.plan().arg("init")).status.success());
+    assert!(r.run(r.plan().args(["add", "mixed-task"])).status.success());
+
+    let ext_dir = r.path().join("ext");
+    std::fs::create_dir_all(&ext_dir).expect("create ext dir");
+    let ext_file = ext_dir.join("note.md");
+    std::fs::write(&ext_file, "---\ntitle: Hi\n---\n\n# Heading\n\nlong prose line that should wrap at the configured width\n").expect("write");
+
+    let scrambled = "---\npriority: high\nstatus: open\ntype: bug\n---\n\nbody\n";
+    std::fs::write(r.task_path("mixed-task"), scrambled).expect("write");
+
+    let out = r.run(
+        r.plan()
+            .arg("format")
+            .arg(r.task_path("mixed-task"))
+            .arg(&ext_dir),
+    );
+    assert!(
+        out.status.success(),
+        "mixed file+dir format must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let task_text = std::fs::read_to_string(r.task_path("mixed-task")).expect("read");
+    assert!(task_text.contains("status: open"), "task formatted");
+    let ext_text = std::fs::read_to_string(&ext_file).expect("read");
+    assert!(ext_text.contains("# Heading"), "external formatted");
+}
+
+#[test]
+fn format_dedups_duplicate_target_in_check() {
+    let r = Root::new();
+    assert!(r.run(r.plan().arg("init")).status.success());
+    assert!(r.run(r.plan().args(["add", "dedup"])).status.success());
+
+    let scrambled = "---\npriority: high\nstatus: open\ntype: bug\n---\n\nbody\n";
+    std::fs::write(r.task_path("dedup"), scrambled).expect("write");
+
+    let out = r.run(
+        r.plan()
+            .args(["format", "--check"])
+            .arg(r.task_path("dedup"))
+            .arg(r.task_path("dedup")),
+    );
+    assert!(!out.status.success(), "dirty check must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let occurrences = stderr.matches("would format").count();
+    assert_eq!(
+        occurrences, 1,
+        "duplicate target must be processed once: stderr={stderr}"
+    );
+}
+
+#[test]
+fn format_missing_paths_error() {
+    let r = Root::new();
+    let out = r.run(
+        r.plan()
+            .arg("format")
+            .arg(r.path().join("nope-one"))
+            .arg(r.path().join("nope-two")),
+    );
+    assert!(!out.status.success(), "missing paths must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("nope-one"), "stderr: {stderr}");
+    assert!(stderr.contains("nope-two"), "stderr: {stderr}");
+}

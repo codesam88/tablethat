@@ -29,7 +29,7 @@ Subcommands (abbreviate to first letter, e.g. `plan b`):
 | `open <slug>` | `o` | Open a task in `$EDITOR` |
 | `delete <slug>` | `d` | Delete a task |
 | `lint [PATH]` | — | Validate frontmatter (schema optional for foreign paths) |
-| `format [PATH]` | — | Format markdown (file or dir) |
+| `format [PATH]...` | — | Format markdown (files or dirs) |
 
 Filters (kanban/browse/list): `-s/--status`, `-t/--type`, `-p/--priority`,
 `-a/--area`, `-q` search. Sort: `-S/--sort FIELD` (repeatable).
@@ -53,8 +53,10 @@ failure on stderr as `<path>: FAIL — ...`. Files with no frontmatter are
 skipped silently in schemaless mode; in schema mode they are validated as
 before.
 
-`format [PATH]`: with a file, format that file; with a directory, format all
-`.md` files in it; with no path, normalize every task in the workspace.
+`format [PATH]...`: with files/directories, format each (directories expand to
+their `.md` files); with no path, normalize every task in the workspace.
+Multiple paths are deduplicated (a file given twice or contained in a given
+directory is processed once); targets are sorted before processing.
 - Task path (files under `<root>/.plan/`, or the no-path whole tree): applies
   canonical field ordering (`status`/`type`/`priority`/`area` first) and
   re-emits multi-line values in block style. A split failure (unclosed `---`)
@@ -67,10 +69,10 @@ before.
   left byte-untouched and reports `Ok(false)` (it never counts as
   "would format" under `--check`). In the general path an unclosed `---`
   delimiter is skipped the same way.
-`--check` dry-runs: directory runs print `would format <path>` per file and
-exit 1 with `N file(s) would be reformatted` if any would change; single-file
-runs print `<path>: would be reformatted`. Skipped files do not affect the
-exit code. `--width`/`-w COLS` overrides `format.width` (default 72) for this
+`--check` dry-runs: each target that would change prints `would format <path>`;
+exit 1 with `N file(s) would be reformatted` when more than one target would
+change, or `<path>: would be reformatted` when exactly one target total would
+change. Skipped files do not affect the exit code. `--width`/`-w COLS` overrides `format.width` (default 72) for this
 run. `--reflow`/`--no-reflow` overrides `format.reflow` (default true) for
 this run.
 
