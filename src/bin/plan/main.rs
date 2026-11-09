@@ -160,8 +160,12 @@ enum Commands {
     },
     /// Format task markdown (frontmatter + body)
     Format {
-        /// File or directory to format (default: .plan/*.md)
-        path: Option<PathBuf>,
+        /// Files or directories to format (default: .plan/*.md)
+        #[arg(
+            value_name = "PATH",
+            help = "Files or directories to format (default: .plan/*.md)"
+        )]
+        paths: Vec<PathBuf>,
         /// Wrap width for markdown body
         #[arg(short, long, value_name = "COLS")]
         width: Option<usize>,
@@ -332,7 +336,7 @@ fn run(cli: Cli) -> Result<(), String> {
             Ok(())
         }
         Some(Commands::Format {
-            path,
+            paths,
             width,
             reflow,
             no_reflow,
@@ -346,129 +350,97 @@ fn run(cli: Cli) -> Result<(), String> {
             } else {
                 cfg.format.reflow
             };
-            match path {
-                Some(p) => {
-                    if p.is_dir() {
-                        let entries = tablethat_lib::plan::store::sorted_md_entries(&p)?;
-                        let mut errors: Vec<String> = Vec::new();
-                        let mut would_change = 0usize;
-                        for entry in &entries {
-                            let is_task = entry.components().any(|c| c.as_os_str() == ".plan");
-                            let fmt_res = if is_task {
-                                tablethat_lib::plan::format::format_file(
-                                    entry,
-                                    effective_width,
-                                    effective_reflow,
-                                    check,
-                                )
-                            } else {
-                                tablethat_lib::plan::format::format_general_file(
-                                    entry,
-                                    effective_width,
-                                    effective_reflow,
-                                    check,
-                                )
-                            };
-                            match fmt_res {
-                                Ok(true) => {
-                                    if check {
-                                        eprintln!("would format {}", entry.display());
-                                        would_change += 1;
-                                    } else {
-                                        eprintln!("formatted {}", entry.display());
-                                    }
-                                }
-                                Ok(false) => {}
-                                Err(e) => errors.push(e),
-                            }
-                        }
-                        if !errors.is_empty() {
-                            return Err(errors.join("\n"));
-                        }
-                        if check && would_change > 0 {
-                            return Err(format!("{} file(s) would be reformatted", would_change));
-                        }
-                        Ok(())
-                    } else if p.is_file() {
-                        let is_task = p.components().any(|c| c.as_os_str() == ".plan");
-                        let fmt_res = if is_task {
-                            tablethat_lib::plan::format::format_file(
-                                &p,
-                                effective_width,
-                                effective_reflow,
-                                check,
-                            )
-                        } else {
-                            tablethat_lib::plan::format::format_general_file(
-                                &p,
-                                effective_width,
-                                effective_reflow,
-                                check,
-                            )
-                        };
-                        match fmt_res {
-                            Ok(true) => {
-                                if check {
-                                    return Err(format!("{}: would be reformatted", p.display()));
-                                }
-                                eprintln!("formatted {}", p.display());
-                                Ok(())
-                            }
-                            Ok(false) => Ok(()),
-                            Err(e) => Err(e),
-                        }
-                    } else {
-                        Err(format!("{}: not a file or directory", p.display()))
-                    }
-                }
-                None => {
-                    if check {
-                        let tasks_dir = root.join(tablethat_lib::PLAN_DIR);
-                        let entries = tablethat_lib::plan::store::read_task_files(&tasks_dir)?;
-                        let mut errors: Vec<String> = Vec::new();
-                        let mut would_change = 0usize;
-                        for entry in &entries {
-                            match tablethat_lib::plan::format::format_file(
-                                entry,
-                                effective_width,
-                                effective_reflow,
-                                true,
-                            ) {
-                                Ok(true) => {
-                                    eprintln!("would format {}", entry.display());
-                                    would_change += 1;
-                                }
-                                Ok(false) => {}
-                                Err(e) => errors.push(e),
-                            }
-                        }
-                        if !errors.is_empty() {
-                            return Err(errors.join("\n"));
-                        }
-                        if would_change > 0 {
-                            return Err(format!("{} file(s) would be reformatted", would_change));
-                        }
-                        eprintln!("all files already canonical");
-                        Ok(())
-                    } else {
-                        match tablethat_lib::plan::format::normalize_all(
-                            &root,
+            if paths.is_empty() {
+                if check {
+                    let tasks_dir = root.join(tablethat_lib::PLAN_DIR);
+                    let entries = tablethat_lib::plan::store::read_task_files(&tasks_dir)?;
+                    let mut errors: Vec<String> = Vec::new();
+                    let mut would_change = 0usize;
+                    for entry in &entries {
+                        match tablethat_lib::plan::format::format_file(
+                            entry,
                             effective_width,
                             effective_reflow,
-                            false,
+                            true,
                         ) {
-                            Ok(0) => {
-                                eprintln!("all files already canonical");
-                                Ok(())
+                            Ok(true) => {
+                                eprintln!("would format {}", entry.display());
+                                would_change += 1;
                             }
-                            Ok(n) => {
-                                eprintln!("fixed {n} file(s)");
-                                Ok(())
-                            }
-                            Err(errors) => Err(errors.join("\n")),
+                            Ok(false) => {}
+                            Err(e) => errors.push(e),
                         }
                     }
+                    if !errors.is_empty() {
+                        return Err(errors.join("\n"));
+                    }
+                    if would_change > 0 {
+                        return Err(format!("{} file(s) would be reformatted", would_change));
+                    }
+                    eprintln!("all files already canonical");
+                    Ok(())
+                } else {
+                    match tablethat_lib::plan::format::normalize_all(
+                        &root,
+                        effective_width,
+                        effective_reflow,
+                        false,
+                    ) {
+                        Ok(0) => {
+                            eprintln!("all files already canonical");
+                            Ok(())
+                        }
+                        Ok(n) => {
+                            eprintln!("fixed {n} file(s)");
+                            Ok(())
+                        }
+                        Err(errors) => Err(errors.join("\n")),
+                    }
                 }
+            } else {
+                let (targets, mut errors) =
+                    tablethat_lib::plan::store::expand_format_targets(&paths);
+                let mut would_change = 0usize;
+                for entry in &targets {
+                    let is_task = entry.components().any(|c| c.as_os_str() == ".plan");
+                    let fmt_res = if is_task {
+                        tablethat_lib::plan::format::format_file(
+                            entry,
+                            effective_width,
+                            effective_reflow,
+                            check,
+                        )
+                    } else {
+                        tablethat_lib::plan::format::format_general_file(
+                            entry,
+                            effective_width,
+                            effective_reflow,
+                            check,
+                        )
+                    };
+                    match fmt_res {
+                        Ok(true) => {
+                            if check {
+                                eprintln!("would format {}", entry.display());
+                                would_change += 1;
+                            } else {
+                                eprintln!("formatted {}", entry.display());
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(e) => errors.push(e),
+                    }
+                }
+                if !errors.is_empty() {
+                    return Err(errors.join("\n"));
+                }
+                if check && would_change > 0 {
+                    if targets.len() == 1 && would_change == 1 {
+                        return Err(format!("{}: would be reformatted", targets[0].display()));
+                    }
+                    return Err(format!("{} file(s) would be reformatted", would_change));
+                }
+                Ok(())
             }
         }
         None => {
