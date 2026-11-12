@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] – 2026-11-12
+
+### Added
+
+- `gloss`: recall search history with Up/Down in search mode (session-wide,
+  newest first, capped at 100; neither end wraps; consecutive duplicates
+  collapse; cancelled searches not recorded; not persisted to disk)
+
+### Fixed
+
+- gloss: Alt-Arrow / ESC-prefixed sequences no longer decoded as bare Esc
+  (caused spurious exits under rxvt/tmux)
+
+### Changed
+
+- Esc is cancel-only in plan browse and gloss; q and Ctrl-C quit
+- gloss preview: q closes the preview
+
 ## [0.2.1] – 2026-11-09
 
 ### Added
