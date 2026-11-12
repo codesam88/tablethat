@@ -176,6 +176,13 @@ struct App {
     search_query: String,
     search_hits: Vec<usize>,
     search_index: usize,
+    /// Committed search queries, newest first. Session-scoped.
+    search_history: Vec<String>,
+    /// `Some(i)` = the query field is showing `search_history[i]`;
+    /// `None` = editing the fresh (unsaved) input.
+    history_cursor: Option<usize>,
+    /// Input being edited when the user first pressed Up.
+    history_draft: String,
     highlight_style: Style,
     highlight_current_style: Style,
     viewport_height: usize,
@@ -210,6 +217,9 @@ impl App {
             search_query: String::new(),
             search_hits: Vec::new(),
             search_index: 0,
+            search_history: Vec::new(),
+            history_cursor: None,
+            history_draft: String::new(),
             highlight_style: Style::default()
                 .fg(Color::Black)
                 .bg(Color::Gray)
@@ -596,6 +606,8 @@ fn cancel_search(app: &mut App) {
     app.search_query.clear();
     app.search_hits.clear();
     app.search_index = 0;
+    app.history_cursor = None;
+    app.history_draft.clear();
     app.load_selected();
 }
 
@@ -606,11 +618,48 @@ fn handle_search_input(app: &mut App, key: KeyEvent) {
         KeyCode::Esc => cancel_search(app),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => cancel_search(app),
         KeyCode::Enter => {
+            if !app.search_query.trim().is_empty()
+                && app
+                    .search_history
+                    .first()
+                    .map(|f| f != &app.search_query)
+                    .unwrap_or(true)
+            {
+                app.search_history.insert(0, app.search_query.clone());
+                if app.search_history.len() > 100 {
+                    app.search_history.truncate(100);
+                }
+            }
             app.search_mode = false;
             app.run_search();
+            app.history_cursor = None;
+            app.history_draft.clear();
         }
         KeyCode::Backspace => {
             app.search_query.pop();
+        }
+        KeyCode::Up => {
+            if app.history_cursor.is_none() && !app.search_history.is_empty() {
+                app.history_draft = app.search_query.clone();
+                app.history_cursor = Some(0);
+                app.search_query = app.search_history[0].clone();
+            } else if let Some(i) = app.history_cursor
+                && i + 1 < app.search_history.len()
+            {
+                app.history_cursor = Some(i + 1);
+                app.search_query = app.search_history[i + 1].clone();
+            }
+        }
+        KeyCode::Down => {
+            if let Some(i) = app.history_cursor {
+                if i > 0 {
+                    app.history_cursor = Some(i - 1);
+                    app.search_query = app.search_history[i - 1].clone();
+                } else {
+                    app.history_cursor = None;
+                    app.search_query = app.history_draft.clone();
+                }
+            }
         }
         KeyCode::Char(ch) => {
             app.search_query.push(ch);
@@ -712,6 +761,8 @@ fn handle_events(app: &mut App, _cfg: &lib::Config) -> Result<Action, Box<dyn st
                 KeyCode::Char('/') => {
                     app.search_mode = true;
                     app.search_query.clear();
+                    app.history_cursor = None;
+                    app.history_draft.clear();
                 }
                 KeyCode::Char('n') => {
                     app.search_next();
@@ -1191,5 +1242,216 @@ mod search_cancel_tests {
         assert!(!app.search_mode, "ctrl-c leaves search mode");
         assert!(app.search_query.is_empty(), "query cleared");
         assert!(app.search_hits.is_empty(), "hits cleared");
+    }
+}
+
+#[cfg(test)]
+mod search_history_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn type_str(app: &mut App, s: &str) {
+        for ch in s.chars() {
+            handle_search_input(app, KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        handle_search_input(app, KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn enter_records_query_newest_first() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "foo");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.search_history, vec!["foo".to_string()]);
+    }
+
+    #[test]
+    fn up_from_fresh_recalls_most_recent() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "foo");
+        press(&mut app, KeyCode::Enter);
+        // reopen search mode
+        app.search_mode = true;
+        app.search_query.clear();
+        press(&mut app, KeyCode::Up);
+        assert_eq!(app.search_query, "foo");
+        assert_eq!(app.history_cursor, Some(0));
+    }
+
+    #[test]
+    fn up_stops_at_oldest_no_wrap() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "a");
+        press(&mut app, KeyCode::Enter);
+        app.search_mode = true;
+        app.search_query.clear();
+        type_str(&mut app, "b");
+        press(&mut app, KeyCode::Enter);
+        // history: ["b","a"]
+        app.search_mode = true;
+        app.search_query.clear();
+        press(&mut app, KeyCode::Up); // b
+        press(&mut app, KeyCode::Up); // a (oldest)
+        press(&mut app, KeyCode::Up); // no-op, stays a
+        assert_eq!(app.search_query, "a");
+        assert_eq!(app.history_cursor, Some(1));
+    }
+
+    #[test]
+    fn two_enters_record_newest_first_order() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "first");
+        press(&mut app, KeyCode::Enter);
+        app.search_mode = true;
+        app.search_query.clear();
+        type_str(&mut app, "second");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.search_history,
+            vec!["second".to_string(), "first".to_string()]
+        );
+    }
+
+    #[test]
+    fn down_from_most_recent_returns_draft() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "foo");
+        press(&mut app, KeyCode::Enter);
+        app.search_mode = true;
+        app.search_query.clear();
+        type_str(&mut app, "abc");
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.search_query, "abc");
+        assert_eq!(app.history_cursor, None);
+    }
+
+    #[test]
+    fn down_with_cursor_none_is_noop() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        app.search_query = "abc".to_string();
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.search_query, "abc");
+        assert_eq!(app.history_cursor, None);
+    }
+
+    #[test]
+    fn consecutive_duplicates_collapse() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "foo");
+        press(&mut app, KeyCode::Enter);
+        app.search_mode = true;
+        app.search_query.clear();
+        type_str(&mut app, "foo");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.search_history, vec!["foo".to_string()]);
+    }
+
+    #[test]
+    fn history_capped_at_100() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        for i in 0..105 {
+            app.search_mode = true;
+            app.search_query.clear();
+            type_str(&mut app, &format!("q{i}"));
+            press(&mut app, KeyCode::Enter);
+        }
+        assert_eq!(app.search_history.len(), 100);
+        assert_eq!(app.search_history[0], "q104".to_string());
+    }
+
+    #[test]
+    fn cancelled_search_not_recorded() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "foo");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.search_history.is_empty());
+    }
+
+    #[test]
+    fn after_enter_history_cursor_none() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "foo");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.history_cursor, None);
+        // A subsequent Up starts from the newest entry again.
+        app.search_mode = true;
+        app.search_query.clear();
+        press(&mut app, KeyCode::Up);
+        assert_eq!(app.search_query, "foo");
+    }
+
+    #[test]
+    fn up_on_empty_history_noop() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        app.search_query = "abc".to_string();
+        press(&mut app, KeyCode::Up);
+        assert_eq!(app.search_query, "abc");
+    }
+
+    #[test]
+    fn ctrl_c_cancel_not_recorded() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "foo");
+        handle_search_input(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(app.search_history.is_empty());
+    }
+
+    #[test]
+    fn backspace_char_while_cursor_some_leaves_cursor() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "foo");
+        press(&mut app, KeyCode::Enter);
+        app.search_mode = true;
+        app.search_query.clear();
+        press(&mut app, KeyCode::Up); // cursor Some(0), query foo
+        // now type a char
+        handle_search_input(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.history_cursor, Some(0));
+        assert_eq!(app.search_query, "foox");
+    }
+
+    #[test]
+    fn down_walks_back_to_most_recent_then_draft() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        type_str(&mut app, "a");
+        press(&mut app, KeyCode::Enter);
+        app.search_mode = true;
+        app.search_query.clear();
+        type_str(&mut app, "b");
+        press(&mut app, KeyCode::Enter);
+        // history ["b","a"]
+        app.search_mode = true;
+        app.search_query.clear();
+        press(&mut app, KeyCode::Up); // b (cursor 0)
+        press(&mut app, KeyCode::Up); // a (cursor 1)
+        press(&mut app, KeyCode::Down); // b (cursor 0)
+        assert_eq!(app.search_query, "b");
+        assert_eq!(app.history_cursor, Some(0));
+        press(&mut app, KeyCode::Down); // draft (empty) cursor None
+        assert_eq!(app.search_query, "");
+        assert_eq!(app.history_cursor, None);
     }
 }
