@@ -386,6 +386,13 @@ impl App {
     }
 }
 
+impl App {
+    #[allow(dead_code)]
+    pub fn handle_key(&mut self, key: KeyEvent) -> Action {
+        handle_key(self, key)
+    }
+}
+
 /// Run single-file TUI viewer
 pub fn run_file_viewer(
     path: &Path,
@@ -615,6 +622,8 @@ fn cancel_search(app: &mut App) {
 /// would type `c`).
 fn handle_search_input(app: &mut App, key: KeyEvent) {
     match key.code {
+        // Alt-Esc is treated as Esc here (non-destructive cancel/close,
+        // never quit) — intentional, not a bug.
         KeyCode::Esc => cancel_search(app),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => cancel_search(app),
         KeyCode::Enter => {
@@ -668,6 +677,80 @@ fn handle_search_input(app: &mut App, key: KeyEvent) {
     }
 }
 
+fn handle_key(app: &mut App, key: KeyEvent) -> Action {
+    if key.kind != KeyEventKind::Press {
+        return Action::None;
+    }
+
+    // Search mode input
+    if app.search_mode {
+        handle_search_input(app, key);
+        return Action::None;
+    }
+
+    // Normal mode
+    match key.code {
+        KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => app.quit = true,
+        KeyCode::Char('c')
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            app.quit = true;
+        }
+        KeyCode::Char('c') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if !app.themes.is_empty() {
+                app.current_theme = (app.current_theme + 1) % app.themes.len();
+                app.load_selected();
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.scroll = app.scroll.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.scroll = app.scroll.saturating_add(1);
+        }
+        KeyCode::PageUp => {
+            app.page_up();
+        }
+        KeyCode::PageDown | KeyCode::Char(' ') => {
+            app.page_down();
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.offset = app.offset.saturating_sub(8);
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            let max = app.max_line_width().saturating_sub(app.width);
+            app.offset = app.offset.saturating_add(8).min(max);
+        }
+        KeyCode::Enter if app.files.len() > 1 => {
+            app.load_selected();
+        }
+        KeyCode::Char('e') => {
+            return Action::OpenEditor;
+        }
+        KeyCode::Char('/') => {
+            app.search_mode = true;
+            app.search_query.clear();
+            app.history_cursor = None;
+            app.history_draft.clear();
+        }
+        KeyCode::Char('n') => {
+            app.search_next();
+        }
+        KeyCode::Char('N') => {
+            app.search_prev();
+        }
+        KeyCode::Char('g') => {
+            app.scroll = 0;
+        }
+        KeyCode::Char('G') => {
+            app.scroll = app.content.len().saturating_sub(app.viewport_height);
+        }
+        _ => {}
+    }
+    Action::None
+}
+
 fn handle_events(app: &mut App, _cfg: &lib::Config) -> Result<Action, Box<dyn std::error::Error>> {
     // crossterm's poll/read can surface a transient io::ErrorKind::Interrupted
     // during a tmux SIGWINCH/resize race. Treat only that kind as "no action
@@ -713,71 +796,7 @@ fn handle_events(app: &mut App, _cfg: &lib::Config) -> Result<Action, Box<dyn st
             _ => {}
         },
         Event::Key(key) => {
-            if key.kind != KeyEventKind::Press {
-                return Ok(Action::None);
-            }
-
-            // Search mode input
-            if app.search_mode {
-                handle_search_input(app, key);
-                return Ok(Action::None);
-            }
-
-            // Normal mode
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
-                KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => app.quit = true,
-                KeyCode::Char('c') => {
-                    if !app.themes.is_empty() {
-                        app.current_theme = (app.current_theme + 1) % app.themes.len();
-                        app.load_selected();
-                    }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    app.scroll = app.scroll.saturating_sub(1);
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    app.scroll = app.scroll.saturating_add(1);
-                }
-                KeyCode::PageUp => {
-                    app.page_up();
-                }
-                KeyCode::PageDown | KeyCode::Char(' ') => {
-                    app.page_down();
-                }
-                KeyCode::Left | KeyCode::Char('h') => {
-                    app.offset = app.offset.saturating_sub(8);
-                }
-                KeyCode::Right | KeyCode::Char('l') => {
-                    let max = app.max_line_width().saturating_sub(app.width);
-                    app.offset = app.offset.saturating_add(8).min(max);
-                }
-                KeyCode::Enter if app.files.len() > 1 => {
-                    app.load_selected();
-                }
-                KeyCode::Char('e') => {
-                    return Ok(Action::OpenEditor);
-                }
-                KeyCode::Char('/') => {
-                    app.search_mode = true;
-                    app.search_query.clear();
-                    app.history_cursor = None;
-                    app.history_draft.clear();
-                }
-                KeyCode::Char('n') => {
-                    app.search_next();
-                }
-                KeyCode::Char('N') => {
-                    app.search_prev();
-                }
-                KeyCode::Char('g') => {
-                    app.scroll = 0;
-                }
-                KeyCode::Char('G') => {
-                    app.scroll = app.content.len().saturating_sub(app.viewport_height);
-                }
-                _ => {}
-            }
+            return Ok(handle_key(app, key));
         }
         _ => {}
     }
@@ -1453,5 +1472,85 @@ mod search_history_tests {
         press(&mut app, KeyCode::Down); // draft (empty) cursor None
         assert_eq!(app.search_query, "");
         assert_eq!(app.history_cursor, None);
+    }
+}
+
+#[cfg(test)]
+mod esc_policy_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn esc_in_normal_mode_does_not_quit() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.quit, "Esc must not quit");
+    }
+
+    #[test]
+    fn q_quits() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(app.quit, "q must quit");
+    }
+
+    #[test]
+    fn ctrl_c_quits() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.quit, "Ctrl-C must quit");
+    }
+
+    #[test]
+    fn esc_in_search_mode_cancels() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        app.search_mode = true;
+        app.search_query = "x".to_string();
+        app.search_hits = vec![3];
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.search_mode);
+        assert!(app.search_query.is_empty());
+        assert!(app.search_hits.is_empty());
+        assert!(!app.quit);
+    }
+
+    #[test]
+    fn alt_q_does_not_quit() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT));
+        assert!(!app.quit, "Alt-q must not quit");
+    }
+
+    #[test]
+    fn alt_c_does_not_quit() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT));
+        assert!(!app.quit, "Alt-c must not quit");
+    }
+
+    #[test]
+    fn ctrl_alt_c_does_not_quit() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        let _ = app.handle_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert!(!app.quit, "Ctrl+Alt-c must not quit");
+    }
+
+    #[test]
+    fn alt_esc_does_not_quit() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::ALT));
+        assert!(!app.quit, "Alt-Esc must not quit");
+    }
+
+    #[test]
+    fn non_press_kind_is_ignored() {
+        let mut app = App::new(Vec::new(), Vec::new(), 80, true, false);
+        let mut key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        key.kind = crossterm::event::KeyEventKind::Release;
+        let _ = app.handle_key(key);
+        assert!(!app.quit, "release event must not quit");
     }
 }
