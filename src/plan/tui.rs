@@ -8,7 +8,6 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use crate as lib;
 use lib::Config;
@@ -47,18 +46,6 @@ fn attention_rank(status: &str) -> u8 {
         "blocked" => 4,
         "done" => 5,
         _ => 6,
-    }
-}
-
-/// Esc-quit debounce transition: first Esc arms (no quit), a second Esc
-/// within 2s confirms, a stale arm re-arms. Pure for testability.
-fn confirm_quit(
-    armed_at: Option<std::time::Instant>,
-    now: std::time::Instant,
-) -> (bool, Option<std::time::Instant>) {
-    match armed_at {
-        Some(t) if now.duration_since(t) < std::time::Duration::from_secs(2) => (true, None),
-        _ => (false, Some(now)),
     }
 }
 
@@ -114,7 +101,6 @@ struct App<'a> {
     selected_column: usize,
     selected_task: usize,
     selected_field: usize,
-    quit: bool,
     filter_status: Option<String>,
     filter_type: Option<String>,
     filter_priority: Option<String>,
@@ -125,7 +111,6 @@ struct App<'a> {
     browse_title: Option<String>,
     search_fulltext: bool,
     hide_done: bool,
-    esc_armed_at: Option<Instant>,
     mode: Mode,
     preview: Vec<Line<'static>>,
     preview_scroll: usize,
@@ -177,7 +162,6 @@ impl<'a> App<'a> {
             selected_column: 0,
             selected_task: 0,
             selected_field: 0,
-            quit: false,
             filter_status: None,
             filter_type: None,
             filter_priority: None,
@@ -186,7 +170,6 @@ impl<'a> App<'a> {
             browse_title: None,
             search_fulltext: false,
             hide_done: cfg.hide_done,
-            esc_armed_at: None,
             mode: Mode::Browse,
             preview: Vec::new(),
             preview_scroll: 0,
@@ -265,8 +248,9 @@ impl<'a> App<'a> {
             || self.hide_done != self.cfg.hide_done
     }
 
-    /// Clear every filter and reload. Used by `q`/Esc (never by search Esc,
-    /// which clears only the search itself).
+    /// Clear every filter and reload. Used by Esc (never by search Esc,
+    /// which clears only the search itself). `q` no longer clears filters;
+    /// it quits from browse mode.
     fn clear_filters(&mut self) {
         self.filter_status = None;
         self.filter_type = None;
@@ -351,7 +335,7 @@ pub fn run_tui(
         ratatui::try_init().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
     let outcome = (|| -> Result<(), Box<dyn std::error::Error>> {
-        while !app.quit {
+        loop {
             if let Err(e) = terminal.draw(|frame| app.render(frame)) {
                 match ratatui::try_init() {
                     Ok(t) => terminal = t,
@@ -806,12 +790,7 @@ impl App<'_> {
             "H:hide-done"
         };
         let text = format!(
-            " Enter:view  l:limit  f:filter  /:search  e:edit  {done_hint}  {}  Ctrl-c:quit ",
-            if self.has_active_filters() {
-                "q:clear-filters"
-            } else {
-                "q:quit"
-            }
+            " Enter:view  l:limit  f:filter  /:search  e:edit  {done_hint}  q:quit  Ctrl-c:quit "
         );
 
         let filters: Vec<(&str, &str)> = [
@@ -826,9 +805,9 @@ impl App<'_> {
         .collect();
 
         let mut spans = vec![Span::styled(text, Style::default().fg(Color::DarkGray))];
-        if self.esc_armed_at.is_some() {
+        if self.has_active_filters() {
             spans.push(Span::styled(
-                " Press Esc again to exit",
+                " Esc:clear-filters",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -887,137 +866,147 @@ impl App<'_> {
                 if key.kind != KeyEventKind::Press {
                     return Ok(Action::None);
                 }
-                match self.mode {
-                    Mode::Preview => {
-                        // Search mode input
-                        if self.search_mode {
-                            self.handle_preview_search_key(key);
-                            return Ok(Action::None);
-                        }
-
-                        // Normal preview mode
-                        match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => self.mode = Mode::Browse,
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                self.preview_scroll = self.preview_scroll.saturating_sub(1);
-                            }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                self.preview_scroll = self.preview_scroll.saturating_add(1);
-                            }
-                            KeyCode::PageUp => {
-                                self.preview_scroll = self.preview_scroll.saturating_sub(20);
-                            }
-                            KeyCode::PageDown | KeyCode::Char(' ') => {
-                                self.preview_scroll = self.preview_scroll.saturating_add(20);
-                            }
-                            KeyCode::Left | KeyCode::Char('h') => {
-                                self.preview_offset = self.preview_offset.saturating_sub(8);
-                            }
-                            KeyCode::Right | KeyCode::Char('l') => {
-                                self.preview_offset = self.preview_offset.saturating_add(8);
-                            }
-                            KeyCode::Char('e') => return Ok(Action::OpenEditor),
-                            KeyCode::Char('/') => {
-                                self.search_mode = true;
-                                self.search_query.clear();
-                            }
-                            KeyCode::Char('n') => self.search_next(),
-                            KeyCode::Char('N') => self.search_prev(),
-                            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
-                                return Ok(Action::Quit);
-                            }
-                            KeyCode::Char('c') => self.cycle_theme(),
-                            _ => {}
-                        }
-                    }
-                    Mode::Browse => {
-                        // Any key but Esc re-arms the quit debounce.
-                        if !matches!(key.code, KeyCode::Esc) {
-                            self.esc_armed_at = None;
-                        }
-                        // Filter-as-you-type search: handled separately so
-                        // Up/Down can confirm the filter and start moving.
-                        if self.search_mode {
-                            self.handle_search_key(key);
-                            return Ok(Action::None);
-                        }
-                        return Ok(match key.code {
-                            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
-                                Action::Quit
-                            }
-                            KeyCode::Char('q') => {
-                                if self.has_active_filters() {
-                                    self.clear_filters();
-                                    Action::None
-                                } else {
-                                    Action::Quit
-                                }
-                            }
-                            KeyCode::Esc => {
-                                if self.has_active_filters() {
-                                    self.clear_filters();
-                                    Action::None
-                                } else {
-                                    let (quit, armed) =
-                                        confirm_quit(self.esc_armed_at, Instant::now());
-                                    self.esc_armed_at = armed;
-                                    if quit { Action::Quit } else { Action::None }
-                                }
-                            }
-                            KeyCode::Enter if !self.columns.is_empty() => Action::OpenGloss,
-                            KeyCode::Char('f') if !self.columns.is_empty() => {
-                                let col = &self.columns[self.selected_column];
-                                if let Some(&task_idx) = col.task_indices.get(self.selected_task) {
-                                    let task = &self.tasks[task_idx];
-                                    match self.selected_field {
-                                        0 => self.filter_type = Some(task.task.task_type.clone()),
-                                        1 => {
-                                            self.filter_priority = Some(task.task.priority.clone())
-                                        }
-                                        2 => self.filter_area = Some(task.task.area.clone()),
-                                        3 => self.filter_search = Some(task.slug.clone()),
-                                        _ => {}
-                                    }
-                                    self.reload_tasks();
-                                }
-                                Action::None
-                            }
-                            KeyCode::Char('H') => {
-                                self.hide_done = !self.hide_done;
-                                self.reload_tasks();
-                                Action::None
-                            }
-                            KeyCode::Char('e') if !self.columns.is_empty() => Action::OpenEditor,
-                            KeyCode::Char('l') => {
-                                self.search_fulltext = false;
-                                self.search_mode = true;
-                                self.search_query.clear();
-                                self.filter_search = None;
-                                self.browse_title = None;
-                                self.reload_tasks();
-                                Action::None
-                            }
-                            KeyCode::Char('/') => {
-                                self.search_fulltext = true;
-                                self.search_mode = true;
-                                self.search_query.clear();
-                                self.filter_search = None;
-                                self.browse_title = None;
-                                self.reload_tasks();
-                                Action::None
-                            }
-                            _ => {
-                                self.handle_task_key(key.code);
-                                Action::None
-                            }
-                        });
-                    }
-                }
+                return Ok(self.handle_key_event(key));
             }
             _ => {}
         }
         Ok(Action::None)
     }
+
+    /// Handle one key press, returning the resulting action. Pure-ish (no
+    /// terminal I/O) so it is unit-testable.
+    #[allow(dead_code)]
+    pub fn handle_key_event(&mut self, key: KeyEvent) -> Action {
+        if key.kind != KeyEventKind::Press {
+            return Action::None;
+        }
+        match self.mode {
+            Mode::Preview => {
+                // Search mode input
+                if self.search_mode {
+                    self.handle_preview_search_key(key);
+                    return Action::None;
+                }
+
+                // Normal preview mode
+                match key.code {
+                    KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => {
+                        self.mode = Mode::Browse;
+                    }
+                    // Alt-Esc is treated as Esc here (non-destructive
+                    // cancel/close, never quit) — intentional, not a bug.
+                    KeyCode::Esc => self.mode = Mode::Browse,
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.preview_scroll = self.preview_scroll.saturating_sub(1);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        self.preview_scroll = self.preview_scroll.saturating_add(1);
+                    }
+                    KeyCode::PageUp => {
+                        self.preview_scroll = self.preview_scroll.saturating_sub(20);
+                    }
+                    KeyCode::PageDown | KeyCode::Char(' ') => {
+                        self.preview_scroll = self.preview_scroll.saturating_add(20);
+                    }
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        self.preview_offset = self.preview_offset.saturating_sub(8);
+                    }
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        self.preview_offset = self.preview_offset.saturating_add(8);
+                    }
+                    KeyCode::Char('e') => return Action::OpenEditor,
+                    KeyCode::Char('/') => {
+                        self.search_mode = true;
+                        self.search_query.clear();
+                    }
+                    KeyCode::Char('n') => self.search_next(),
+                    KeyCode::Char('N') => self.search_prev(),
+                    KeyCode::Char('c')
+                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                            && !key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        return Action::Quit;
+                    }
+                    KeyCode::Char('c') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.cycle_theme();
+                    }
+                    _ => {}
+                }
+                Action::None
+            }
+            Mode::Browse => {
+                // Filter-as-you-type search: handled separately so
+                // Up/Down can confirm the filter and start moving.
+                if self.search_mode {
+                    self.handle_search_key(key);
+                    return Action::None;
+                }
+                match key.code {
+                    KeyCode::Char('c')
+                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                            && !key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        Action::Quit
+                    }
+                    KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => Action::Quit,
+                    // Alt-Esc is treated as Esc here (non-destructive
+                    // cancel/close, never quit) — intentional, not a bug.
+                    KeyCode::Esc => {
+                        if self.has_active_filters() {
+                            self.clear_filters();
+                        }
+                        Action::None
+                    }
+                    KeyCode::Enter if !self.columns.is_empty() => Action::OpenGloss,
+                    KeyCode::Char('f') if !self.columns.is_empty() => {
+                        let col = &self.columns[self.selected_column];
+                        if let Some(&task_idx) = col.task_indices.get(self.selected_task) {
+                            let task = &self.tasks[task_idx];
+                            match self.selected_field {
+                                0 => self.filter_type = Some(task.task.task_type.clone()),
+                                1 => self.filter_priority = Some(task.task.priority.clone()),
+                                2 => self.filter_area = Some(task.task.area.clone()),
+                                3 => self.filter_search = Some(task.slug.clone()),
+                                _ => {}
+                            }
+                            self.reload_tasks();
+                        }
+                        Action::None
+                    }
+                    KeyCode::Char('H') => {
+                        self.hide_done = !self.hide_done;
+                        self.reload_tasks();
+                        Action::None
+                    }
+                    KeyCode::Char('e') if !self.columns.is_empty() => Action::OpenEditor,
+                    KeyCode::Char('l') => {
+                        self.search_fulltext = false;
+                        self.search_mode = true;
+                        self.search_query.clear();
+                        self.filter_search = None;
+                        self.browse_title = None;
+                        self.reload_tasks();
+                        Action::None
+                    }
+                    KeyCode::Char('/') => {
+                        self.search_fulltext = true;
+                        self.search_mode = true;
+                        self.search_query.clear();
+                        self.filter_search = None;
+                        self.browse_title = None;
+                        self.reload_tasks();
+                        Action::None
+                    }
+                    _ => {
+                        self.handle_task_key(key.code);
+                        Action::None
+                    }
+                }
+            }
+        }
+    }
+
+    // Canonical key entry point (mode dispatches internally).
 
     fn handle_task_key(&mut self, code: KeyCode) {
         if self.columns.is_empty() {
@@ -1379,32 +1368,176 @@ mod nav_tests {
 }
 
 #[cfg(test)]
-mod esc_tests {
+mod esc_policy_tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    #[test]
-    fn first_esc_arms_instead_of_quitting() {
-        let now = Instant::now();
-        let (quit, armed) = confirm_quit(None, now);
-        assert!(!quit);
-        assert_eq!(armed, Some(now));
+    fn app() -> App<'static> {
+        let cfg = Box::leak(Box::new(Config::default()));
+        let root = Box::leak(Box::new(std::path::PathBuf::from("/tmp")));
+        let tmp = tempfile::tempdir().unwrap();
+        let plan_dir = tmp.path().join(".plan");
+        std::fs::create_dir_all(&plan_dir).unwrap();
+        let task_path = plan_dir.join("aaa.md");
+        std::fs::write(
+            &task_path,
+            "---\nstatus: open\ntype: feature\npriority: medium\narea: \n---\n",
+        )
+        .unwrap();
+        let entries = vec![task_path];
+        let exclude: Vec<String> = Vec::new();
+        let tasks = crate::plan::query::load_and_filter_tasks(
+            &entries, None, None, None, None, None, &exclude,
+        );
+        // Keep the temp dir alive for the lifetime of the leaked app.
+        let _ = Box::leak(Box::new(tmp));
+        App::new(root, cfg, tasks, entries)
     }
 
     #[test]
-    fn second_esc_within_two_seconds_quits() {
-        let t0 = Instant::now();
-        let (quit, _) = confirm_quit(Some(t0), t0 + Duration::from_secs(1));
-        assert!(quit);
+    fn esc_in_browse_mode_does_not_quit() {
+        let mut app = app();
+        app.mode = Mode::Browse;
+        let action = app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(action, Action::None);
     }
 
     #[test]
-    fn stale_arm_re_arms_instead_of_quitting() {
-        let t0 = Instant::now();
-        let t1 = t0 + Duration::from_secs(3);
-        let (quit, armed) = confirm_quit(Some(t0), t1);
-        assert!(!quit);
-        assert_eq!(armed, Some(t1));
+    fn q_in_browse_mode_quits() {
+        let mut app = app();
+        app.mode = Mode::Browse;
+        let action = app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert_eq!(action, Action::Quit);
+    }
+
+    #[test]
+    fn ctrl_c_in_browse_mode_quits() {
+        let mut app = app();
+        app.mode = Mode::Browse;
+        let action = app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(action, Action::Quit);
+    }
+
+    #[test]
+    fn esc_clears_active_filters_without_quitting() {
+        let mut app = app();
+        app.mode = Mode::Browse;
+        app.filter_status = Some("open".to_string());
+        assert!(app.has_active_filters());
+        let action = app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(action, Action::None);
+        assert!(!app.has_active_filters());
+    }
+
+    #[test]
+    fn esc_in_preview_closes_preview() {
+        let mut app = app();
+        app.mode = Mode::Preview;
+        let action = app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Browse);
+        assert_eq!(action, Action::None);
+    }
+
+    #[test]
+    fn esc_in_browse_search_cancels() {
+        let mut app = app();
+        app.mode = Mode::Browse;
+        app.search_mode = true;
+        app.search_query = "zzz".to_string();
+        app.browse_title = Some("zzz".to_string());
+        app.reload_tasks();
+        assert!(app.tasks.is_empty(), "filter should remove all tasks");
+        app.handle_search_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.search_mode);
+        assert!(app.search_query.is_empty());
+        assert!(app.browse_title.is_none(), "browse_title filter cleared");
+        assert_eq!(app.tasks.len(), 1, "tasks restored");
+    }
+
+    #[test]
+    fn alt_q_in_browse_does_not_quit() {
+        let mut app = app();
+        app.mode = Mode::Browse;
+        let action = app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT));
+        assert_ne!(action, Action::Quit);
+    }
+
+    #[test]
+    fn alt_esc_in_browse_does_not_quit() {
+        let mut app = app();
+        app.mode = Mode::Browse;
+        let action = app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::ALT));
+        assert_ne!(action, Action::Quit);
+    }
+
+    #[test]
+    fn alt_up_arrow_in_browse_does_not_quit() {
+        let mut app = app();
+        app.mode = Mode::Browse;
+        let action = app.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        assert_ne!(action, Action::Quit);
+    }
+
+    #[test]
+    fn non_press_kind_is_ignored() {
+        let mut app = app();
+        app.mode = Mode::Browse;
+        let mut key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        key.kind = crossterm::event::KeyEventKind::Release;
+        let action = app.handle_key_event(key);
+        assert_eq!(action, Action::None);
+        assert_ne!(action, Action::Quit);
+    }
+
+    #[test]
+    fn ctrl_c_in_preview_quits() {
+        let mut app = app();
+        app.mode = Mode::Preview;
+        let action = app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(action, Action::Quit);
+    }
+
+    #[test]
+    fn ctrl_c_in_preview_does_not_cycle_theme() {
+        let mut app = app();
+        app.mode = Mode::Preview;
+        app.themes = vec![
+            lib::theme::ThemeFile {
+                name: "a".to_string(),
+                theme: lib::theme::ThemeConfig::default(),
+            },
+            lib::theme::ThemeFile {
+                name: "b".to_string(),
+                theme: lib::theme::ThemeConfig::default(),
+            },
+        ];
+        app.current_theme = 0;
+        let before = app.current_theme;
+        let _ = app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(app.current_theme, before, "Ctrl-c must not cycle theme");
+    }
+
+    #[test]
+    fn ctrl_alt_c_in_preview_does_not_cycle_theme() {
+        let mut app = app();
+        app.mode = Mode::Preview;
+        app.themes = vec![
+            lib::theme::ThemeFile {
+                name: "a".to_string(),
+                theme: lib::theme::ThemeConfig::default(),
+            },
+            lib::theme::ThemeFile {
+                name: "b".to_string(),
+                theme: lib::theme::ThemeConfig::default(),
+            },
+        ];
+        app.current_theme = 0;
+        let before = app.current_theme;
+        let _ = app.handle_key_event(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(app.current_theme, before, "Ctrl+Alt-c must not cycle theme");
     }
 }
 

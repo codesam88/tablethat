@@ -100,7 +100,9 @@ pub fn resolve_slugs(root: &std::path::Path, query: &str) -> Vec<PathBuf> {
 }
 
 /// TUI selector for choosing from multiple matches.
-/// Returns the selected path, or None if the user aborted (q/Ctrl-C).
+/// Returns the selected path, or None if the user aborted (Esc/q/Ctrl-C).
+/// Esc cancels (non-destructive); q is not a selection char here, so it
+/// also cancels. Ctrl-C cancels too.
 pub fn select_slug(matches: &[PathBuf]) -> Option<PathBuf> {
     use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
     use ratatui::{
@@ -133,7 +135,7 @@ pub fn select_slug(matches: &[PathBuf]) -> Option<PathBuf> {
         let list = List::new(items)
             .block(
                 Block::default()
-                    .title(" Select task (Enter:select  q:abort) ")
+                    .title(" Select task (Enter:select  Esc/q/Ctrl-C:abort) ")
                     .borders(Borders::ALL),
             )
             .highlight_style(
@@ -164,11 +166,18 @@ pub fn select_slug(matches: &[PathBuf]) -> Option<PathBuf> {
             && key.kind == KeyEventKind::Press
         {
             match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
+                KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => {
                     ratatui::restore();
                     return None;
                 }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Esc => {
+                    ratatui::restore();
+                    return None;
+                }
+                KeyCode::Char('c')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
                     ratatui::restore();
                     return None;
                 }
