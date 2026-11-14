@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] – 2026-11-14
+
+### Fixed
+
+- `plan format`: tables now Prettier-compatible — column widths from header/body
+  display width (CJK-safe), delimiter excluded, minimum `---` width, alignment-aware
+  padding, single-space surround; fixes column separators rendering 2 spaces from
+  cell text and Prettier warnings
+- `plan format`: preserve leading empty cell in table rows (fixed dropped first
+  empty cell)
+
 ## [0.2.2] – 2026-11-12
 
 ### Added
