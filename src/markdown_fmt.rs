@@ -111,6 +111,8 @@ fn splice_format(text: &str, width: usize, reflow: bool) -> String {
         if *s >= 1 && *e <= lines.len() && *s <= *e {
             let all_prefixed = (*s..=*e).all(|ln| {
                 let l = lines[ln - 1];
+                // ws_len is a char boundary: trim_start removes whole chars and
+                // the leading indent is ASCII whitespace (spaces/tabs).
                 let ws_len = l.len() - l.trim_start().len();
                 l[..ws_len].chars().all(char::is_whitespace) && l[ws_len..].starts_with('|')
             });
@@ -931,8 +933,19 @@ fn split_table_cells(s: &str) -> Vec<String> {
     cells
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColumnAlign {
+    None,
+    Left,
+    Right,
+    Center,
+}
+
 fn align_table_lines(lines: &[&str]) -> Vec<String> {
     // Capture each row's leading-whitespace indent so prefixed tables keep it.
+    // The indent prefix is ASCII whitespace (spaces/tabs); `ws_len` is a byte
+    // offset that always lands on a char boundary because trim_start removes
+    // whole characters and the prefix contains only ASCII bytes.
     let indents: Vec<String> = lines
         .iter()
         .map(|line| {
@@ -941,12 +954,14 @@ fn align_table_lines(lines: &[&str]) -> Vec<String> {
         })
         .collect();
 
-    let parsed: Vec<Vec<String>> = lines
+    let mut parsed: Vec<Vec<String>> = lines
         .iter()
         .map(|line| {
+            // ws_len is on a char boundary (see note above).
             let ws_len = line.len() - line.trim_start().len();
             let rest = &line[ws_len..];
-            let inner = rest.trim_start_matches('|').trim_end_matches('|');
+            let inner = rest.strip_prefix('|').unwrap_or(rest);
+            let inner = inner.strip_suffix('|').unwrap_or(inner);
             split_table_cells(inner)
                 .into_iter()
                 .map(|c| c.trim().to_string())
@@ -955,35 +970,89 @@ fn align_table_lines(lines: &[&str]) -> Vec<String> {
         .collect();
 
     let num_cols = parsed.iter().map(|r| r.len()).max().unwrap_or(0);
+
+    // Pad short rows with empty cells.
+    for row in &mut parsed {
+        while row.len() < num_cols {
+            row.push(String::new());
+        }
+    }
+
+    // Alignment is derived from the delimiter row (index 1) when present.
+    let alignment: Vec<ColumnAlign> = if parsed.len() >= 2 {
+        (0..num_cols)
+            .map(|j| {
+                let cell = parsed[1].get(j).map(|s| s.as_str()).unwrap_or("");
+                if cell.starts_with(':') && cell.ends_with(':') {
+                    ColumnAlign::Center
+                } else if cell.starts_with(':') {
+                    ColumnAlign::Left
+                } else if cell.ends_with(':') {
+                    ColumnAlign::Right
+                } else {
+                    ColumnAlign::None
+                }
+            })
+            .collect()
+    } else {
+        vec![ColumnAlign::None; num_cols]
+    };
+
+    // Column widths come from all non-delimiter rows only, with a floor of 3.
     let mut col_widths = vec![0usize; num_cols];
-    for row in &parsed {
-        for (j, cell) in row.iter().enumerate() {
-            if j < col_widths.len() {
-                col_widths[j] = col_widths[j].max(cell.len());
+    for (row_idx, row) in parsed.iter().enumerate() {
+        if row_idx == 1 {
+            continue;
+        }
+        for (cell, width) in row.iter().zip(col_widths.iter_mut()) {
+            let w = display_width(cell);
+            if w > *width {
+                *width = w;
             }
+        }
+    }
+    for w in &mut col_widths {
+        if *w < 3 {
+            *w = 3;
         }
     }
 
     let mut out = Vec::new();
     for (row_idx, row) in parsed.iter().enumerate() {
         let mut line = String::from("|");
-        for (j, cell) in row.iter().enumerate() {
+        for j in 0..num_cols {
             let w = col_widths.get(j).copied().unwrap_or(3);
             if row_idx == 1 {
-                let marker = if cell.starts_with(':') && cell.ends_with(':') {
-                    format!(" :{:-<w$}: ", "", w = w.saturating_sub(2))
-                } else if cell.starts_with(':') {
-                    format!(" :{:-<w$} ", "", w = w.saturating_sub(1))
-                } else if cell.ends_with(':') {
-                    format!(" {:-<w$}: ", "", w = w.saturating_sub(1))
-                } else {
-                    format!(" {:-<w$} ", "", w = w)
+                // delimiter row
+                let marker = match alignment.get(j).copied().unwrap_or(ColumnAlign::None) {
+                    ColumnAlign::None => "-".repeat(w),
+                    ColumnAlign::Left => format!(":{}", "-".repeat(w.saturating_sub(1))),
+                    ColumnAlign::Right => format!("{}:", "-".repeat(w.saturating_sub(1))),
+                    ColumnAlign::Center => format!(":{}:", "-".repeat(w.saturating_sub(2))),
                 };
+                line.push(' ');
                 line.push_str(&marker);
+                line.push(' ');
+                line.push('|');
             } else {
-                line.push_str(&format!(" {:<w$} ", cell, w = w));
+                let cell = row.get(j).map(|s| s.as_str()).unwrap_or("");
+                let dw = display_width(cell);
+                let pad = w.saturating_sub(dw);
+                let align = alignment.get(j).copied().unwrap_or(ColumnAlign::None);
+                let padded = match align {
+                    ColumnAlign::Right => format!("{}{}", " ".repeat(pad), cell),
+                    ColumnAlign::Center => {
+                        let left = pad / 2;
+                        let right = pad - left;
+                        format!("{}{}{}", " ".repeat(left), cell, " ".repeat(right))
+                    }
+                    _ => format!("{}{}", cell, " ".repeat(pad)),
+                };
+                line.push(' ');
+                line.push_str(&padded);
+                line.push(' ');
+                line.push('|');
             }
-            line.push('|');
         }
         out.push(format!("{}{}", indents[row_idx], line));
     }
@@ -1097,6 +1166,42 @@ mod tests {
         let once = splice_format(s, 80, false);
         let twice = splice_format(&once, 80, false);
         assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn leading_empty_cell_preserved() {
+        for s in [
+            "|  | a |\n| --- | --- |\n|  | b |\n",
+            "|| a |\n|---|---|\n|| b |\n",
+        ] {
+            let out = splice_format(s, 80, false);
+            for line in out.lines() {
+                if line.trim_start().starts_with('|') {
+                    let trimmed = line.trim_start();
+                    let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
+                    let inner = inner.strip_suffix('|').unwrap_or(inner);
+                    assert_eq!(
+                        inner.split('|').count(),
+                        2,
+                        "wrong column count: {line:?} (from {s:?})"
+                    );
+                }
+            }
+            for line in out.lines() {
+                if line.trim_start().starts_with('|') && !line.contains("---") {
+                    let trimmed = line.trim_start();
+                    let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
+                    let inner = inner.strip_suffix('|').unwrap_or(inner);
+                    let first = inner.split('|').next().unwrap_or("").trim();
+                    assert!(
+                        first.is_empty(),
+                        "leading empty cell lost: {line:?} (from {s:?})"
+                    );
+                }
+            }
+            html_eq(s, &out);
+            assert_eq!(splice_format(&out, 80, false), out, "fixpoint");
+        }
     }
 
     #[test]
