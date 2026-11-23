@@ -166,7 +166,7 @@ enum Commands {
             help = "Files or directories to format (default: .plan/*.md)"
         )]
         paths: Vec<PathBuf>,
-        /// Wrap width for markdown body
+        /// Wrap width for markdown body (default: 78)
         #[arg(short, long, value_name = "COLS")]
         width: Option<usize>,
         /// Join short lines into flow before re-splitting

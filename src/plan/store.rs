@@ -15,6 +15,144 @@ pub fn sorted_md_entries(dir: &std::path::Path) -> Result<Vec<PathBuf>, String> 
     Ok(v)
 }
 
+fn has_glob_meta(s: &str) -> bool {
+    s.bytes().any(|b| b == b'*' || b == b'?' || b == b'[')
+}
+
+fn walk_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_files(&path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+fn match_component(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    fn rec(p: &[char], t: &[char]) -> bool {
+        if p.is_empty() {
+            return t.is_empty();
+        }
+        match p[0] {
+            '*' => {
+                if rec(&p[1..], t) {
+                    return true;
+                }
+                if !t.is_empty() && rec(p, &t[1..]) {
+                    return true;
+                }
+                false
+            }
+            '?' => !t.is_empty() && rec(&p[1..], &t[1..]),
+            '[' => {
+                if t.is_empty() {
+                    return false;
+                }
+                let mut i = 1usize;
+                let neg = if i < p.len() && (p[i] == '!' || p[i] == '^') {
+                    i += 1;
+                    true
+                } else {
+                    false
+                };
+                // leading ']' is literal
+                if i < p.len() && p[i] == ']' {
+                    // handled below as normal char check? treat literal
+                    // We'll process as a char match
+                }
+                let mut matched = false;
+                // handle literal leading ]
+                if i < p.len() && p[i] == ']' {
+                    if t[0] == ']' {
+                        matched = true;
+                    }
+                    i += 1;
+                }
+                while i < p.len() && p[i] != ']' {
+                    if i + 2 < p.len() && p[i + 1] == '-' {
+                        // range i..i+2 (need i+2 valid)
+                        if i + 2 < p.len() {
+                            let lo = p[i];
+                            let hi = p[i + 2];
+                            if t[0] >= lo && t[0] <= hi {
+                                matched = true;
+                            }
+                            i += 3;
+                            continue;
+                        }
+                    }
+                    if p[i] == t[0] {
+                        matched = true;
+                    }
+                    i += 1;
+                }
+                if i >= p.len() {
+                    // no closing bracket: treat '[' literally
+                    return t[0] == '[' && rec(&p[1..], &t[1..]);
+                }
+                if neg {
+                    matched = !matched;
+                }
+                if matched {
+                    rec(&p[i + 1..], &t[1..])
+                } else {
+                    false
+                }
+            }
+            c => !t.is_empty() && c == t[0] && rec(&p[1..], &t[1..]),
+        }
+    }
+    rec(&p, &t)
+}
+
+fn match_components(pattern: &[&str], text: &[&str]) -> bool {
+    if pattern.is_empty() {
+        return text.is_empty();
+    }
+    if pattern[0] == "**" {
+        if pattern.len() == 1 {
+            return true;
+        }
+        for i in 0..=text.len() {
+            if match_components(&pattern[1..], &text[i..]) {
+                return true;
+            }
+        }
+        false
+    } else {
+        if text.is_empty() {
+            return false;
+        }
+        if match_component(pattern[0], text[0]) {
+            match_components(&pattern[1..], &text[1..])
+        } else {
+            false
+        }
+    }
+}
+
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<&str> = if pattern.is_empty() {
+        vec![]
+    } else {
+        pattern.split('/').collect()
+    };
+    let t: Vec<&str> = if text.is_empty() {
+        vec![]
+    } else {
+        text.split('/').collect()
+    };
+    match_components(&p, &t)
+}
+
 /// Expand a list of format targets (files and/or directories) into a sorted,
 /// deduplicated list of markdown files. Directory entries come from
 /// `sorted_md_entries`. Read errors for a directory and non-file/non-dir
@@ -23,7 +161,56 @@ pub fn expand_format_targets(paths: &[PathBuf]) -> (Vec<PathBuf>, Vec<String>) {
     let mut targets: Vec<PathBuf> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for p in paths {
-        if p.is_dir() {
+        let s = p.to_string_lossy();
+        if has_glob_meta(&s) {
+            // base dir extraction
+            let first_meta = s
+                .bytes()
+                .position(|b| b == b'*' || b == b'?' || b == b'[')
+                .unwrap();
+            let prefix = &s[..first_meta];
+            let base_str = if let Some(i) = prefix.rfind('/') {
+                &prefix[..=i]
+            } else {
+                ""
+            };
+            let base_path = if base_str.is_empty() {
+                PathBuf::from(".")
+            } else {
+                PathBuf::from(base_str)
+            };
+            if !base_path.is_dir() {
+                errors.push(format!("{}: not a file or directory", p.display()));
+                continue;
+            }
+            let recursive = s.contains("**");
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            if recursive {
+                walk_files(&base_path, &mut candidates);
+            } else {
+                if let Ok(rd) = std::fs::read_dir(&base_path) {
+                    for entry in rd.flatten() {
+                        candidates.push(entry.path());
+                    }
+                }
+            }
+            let rel_pattern = &s[base_str.len()..];
+            let mut matched_any = false;
+            for cand in candidates {
+                if !cand.is_file() {
+                    continue;
+                }
+                let rel = cand.strip_prefix(&base_path).unwrap_or(&cand);
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                if glob_match(rel_pattern, &rel_str) {
+                    targets.push(cand);
+                    matched_any = true;
+                }
+            }
+            if !matched_any {
+                errors.push(format!("{}: no match", p.display()));
+            }
+        } else if p.is_dir() {
             match sorted_md_entries(p) {
                 Ok(entries) => targets.extend(entries),
                 Err(e) => errors.push(e),
@@ -562,5 +749,58 @@ mod entries_tests {
         assert!(targets.is_empty());
         assert!(!errors.is_empty());
         assert!(errors[0].contains("nope"));
+    }
+
+    #[test]
+    fn expand_format_targets_glob_recursive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        std::fs::create_dir_all(base.join("sub")).unwrap();
+        std::fs::write(base.join("top.md"), "x").unwrap();
+        std::fs::write(base.join("sub").join("nested.md"), "x").unwrap();
+        std::fs::write(base.join("sub").join("other.txt"), "x").unwrap();
+        let pattern = base.join("**").join("*.md");
+        let (targets, errors) = super::expand_format_targets(&[pattern]);
+        assert!(errors.is_empty(), "no errors: {errors:?}");
+        let names: Vec<String> = targets
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"top.md".to_string()));
+        assert!(names.contains(&"nested.md".to_string()));
+        assert_eq!(targets.len(), 2);
+    }
+
+    #[test]
+    fn expand_format_targets_glob_single_level() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        std::fs::create_dir_all(base.join("sub")).unwrap();
+        std::fs::write(base.join("a.md"), "x").unwrap();
+        std::fs::write(base.join("sub").join("b.md"), "x").unwrap();
+        let pattern = base.join("*.md");
+        let (targets, errors) = super::expand_format_targets(&[pattern]);
+        assert!(errors.is_empty(), "no errors: {errors:?}");
+        let names: Vec<String> = targets
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["a.md"]);
+    }
+
+    #[test]
+    fn expand_format_targets_glob_no_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        std::fs::write(base.join("a.md"), "x").unwrap();
+        let pattern = base.join("*.txt");
+        let (targets, errors) = super::expand_format_targets(&[pattern.clone()]);
+        assert!(targets.is_empty());
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("no match"), "errors: {errors:?}");
+        assert!(
+            errors[0].contains(&pattern.to_string_lossy().to_string())
+                || errors[0].contains("*.txt")
+        );
     }
 }

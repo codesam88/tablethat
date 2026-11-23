@@ -55,8 +55,10 @@ before.
 
 `format [PATH]...`: with files/directories, format each (directories expand to
 their `.md` files); with no path, normalize every task in the workspace.
-Multiple paths are deduplicated (a file given twice or contained in a given
-directory is processed once); targets are sorted before processing.
+Glob patterns are supported, including `**` for recursive matches (e.g.
+`path/**/*.md`); a pattern with no matches is an error. Multiple paths are
+deduplicated (a file given twice or contained in a given directory is
+processed once); targets are sorted before processing.
 - Task path (files under `<root>/.plan/`, or the no-path whole tree): applies
   canonical field ordering (`status`/`type`/`priority`/`area` first) and
   re-emits multi-line values in block style. A split failure (unclosed `---`)
@@ -72,7 +74,7 @@ directory is processed once); targets are sorted before processing.
 `--check` dry-runs: each target that would change prints `would format <path>`;
 exit 1 with `N file(s) would be reformatted` when more than one target would
 change, or `<path>: would be reformatted` when exactly one target total would
-change. Skipped files do not affect the exit code. `--width`/`-w COLS` overrides `format.width` (default 72) for this
+change. Skipped files do not affect the exit code. `--width`/`-w COLS` overrides `format.width` (default 78) for this
 run. `--reflow`/`--no-reflow` overrides `format.reflow` (default true) for
 this run.
 
