@@ -19,7 +19,7 @@ jobs:
           persist-credentials: false
 
       - name: Install just and uv
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: just,uv
 
@@ -40,7 +40,7 @@ jobs:
         run: just test
 
       - name: Install audit tools
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: cargo-audit,cargo-deny
 
@@ -56,7 +56,7 @@ jobs:
           persist-credentials: false
 
       - name: Install just and uv
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: just,uv
 
@@ -228,7 +228,7 @@ jobs:
           subject-path: SHA256SUMS.txt
 
       - name: Create release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           generate_release_notes: true
           files: |
