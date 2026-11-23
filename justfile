@@ -10,7 +10,7 @@ help:
 # autoformat rust + plans
 format:
     cargo fmt
-    cargo run --bin plan -- format -w 72
+    cargo run --bin plan -- format -w 78
 
 # cargo fmt --check + cargo clippy
 check: zizmor-check

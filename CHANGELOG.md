@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] – 2026-11-23
+
+### Added
+
+- `plan format [PATH]`: glob patterns supported, including `**` for
+  recursive matches (e.g. `path/**/*.md` expands to all `*.md` recursively
+  under `path/`); a pattern with no matches is an error
+
+### Changed
+
+- `plan format` default wrap width 72 → 78 (`format.width`; `--width` help
+  now states the default)
+- `comrak` 0.59 → 1.0 (tuple-variant `NodeValue` arms updated; no
+  rendering change)
+
 ## [0.2.3] – 2026-11-14
 
 ### Fixed
