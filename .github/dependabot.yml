@@ -9,6 +9,10 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore
+    groups:
+      cargo-deps:
+        patterns:
+          - "*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -16,3 +20,7 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore
+    groups:
+      actions-deps:
+        patterns:
+          - "*"

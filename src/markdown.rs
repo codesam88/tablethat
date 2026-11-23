@@ -245,15 +245,15 @@ fn render_inline(
                     spans.push(Span::styled(code.literal.clone(), th.code));
                 }
             }
-            NodeValue::Strong => {
+            NodeValue::Strong(_) => {
                 let s = base_style.add_modifier(Modifier::BOLD);
                 render_inline(&child, th, spans, s);
             }
-            NodeValue::Emph => {
+            NodeValue::Emph(_) => {
                 let s = base_style.add_modifier(Modifier::DIM);
                 render_inline(&child, th, spans, s);
             }
-            NodeValue::Strikethrough => {
+            NodeValue::Strikethrough(_) => {
                 render_inline(&child, th, spans, base_style);
             }
             NodeValue::Link(_link) => {
@@ -855,7 +855,7 @@ fn render_node(
             render_table(node, lines, ascii, table_hi);
             lines.push(Line::from(""));
         }
-        NodeValue::ThematicBreak => {
+        NodeValue::ThematicBreak(_) => {
             lines.push(Line::from("---".to_string()));
             lines.push(Line::from(""));
         }
