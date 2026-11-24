@@ -21,14 +21,21 @@ pub fn sorted_md_entries(dir: &std::path::Path) -> Result<Vec<PathBuf>, String> 
 /// symlinked `.md` files are included. Unlike a bare `read_dir`, an
 /// unreadable directory is `Err` — callers must not mistake IO failure for
 /// an empty listing.
-pub fn sorted_md_tree(dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
+///
+/// `excludes` prunes the walk via [`is_excluded`]: an excluded subdirectory
+/// is not descended into and excluded files are skipped.
+pub fn sorted_md_tree(dir: &std::path::Path, excludes: &[String]) -> Result<Vec<PathBuf>, String> {
     let mut v: Vec<PathBuf> = Vec::new();
-    collect_md_recursive(dir, &mut v)?;
+    collect_md_recursive(dir, &mut v, excludes)?;
     v.sort();
     Ok(v)
 }
 
-fn collect_md_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+fn collect_md_recursive(
+    dir: &std::path::Path,
+    out: &mut Vec<PathBuf>,
+    excludes: &[String],
+) -> Result<(), String> {
     let rd = std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
     for entry in rd {
         let entry = entry.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
@@ -37,40 +44,199 @@ fn collect_md_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) -> Result
         // dirs so a symlink loop cannot recurse forever.
         let is_symlink = entry.file_type().map(|t| t.is_symlink()).unwrap_or(false);
         if path.is_dir() && !is_symlink {
-            collect_md_recursive(&path, out)?;
-        } else if path.extension().is_some_and(|ext| ext == "md") {
+            if is_excluded(&path, excludes) {
+                continue;
+            }
+            collect_md_recursive(&path, out, excludes)?;
+        } else if path.extension().is_some_and(|ext| ext == "md") && !is_excluded(&path, excludes) {
             out.push(path);
         }
     }
     Ok(())
 }
 
+/// Whether a format target is dropped by `--exclude` patterns.
+///
+/// Exclude patterns use `*`, `?`, `[...]`, and `**` (`**` spans path
+/// separators); quote them so the shell passes them through. Trailing
+/// slashes are ignored. A pattern without `/` matches against every path
+/// component, so `target` excludes a `target/` directory (pruning its whole
+/// subtree) as well as any file or directory named `target`. A pattern
+/// containing `/` matches against the whole target path as displayed
+/// (relative stays relative), e.g. `docs/draft/**` or `**/*.gen.md`.
+fn is_excluded(path: &std::path::Path, excludes: &[String]) -> bool {
+    if excludes.is_empty() {
+        return false;
+    }
+    let full = path.to_string_lossy().replace('\\', "/");
+    let comps: Vec<&str> = full.split('/').collect();
+    excludes.iter().any(|raw| {
+        let pat = raw.trim_end_matches('/');
+        if pat.is_empty() {
+            return false;
+        }
+        if pat.contains('/') {
+            glob_match(pat, &full)
+        } else {
+            comps.iter().any(|c| match_component(pat, c))
+        }
+    })
+}
+
+fn match_component(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    fn rec(p: &[char], t: &[char]) -> bool {
+        if p.is_empty() {
+            return t.is_empty();
+        }
+        match p[0] {
+            '*' => {
+                if rec(&p[1..], t) {
+                    return true;
+                }
+                if !t.is_empty() && rec(p, &t[1..]) {
+                    return true;
+                }
+                false
+            }
+            '?' => !t.is_empty() && rec(&p[1..], &t[1..]),
+            '[' => {
+                if t.is_empty() {
+                    return false;
+                }
+                let mut i = 1usize;
+                let neg = if i < p.len() && (p[i] == '!' || p[i] == '^') {
+                    i += 1;
+                    true
+                } else {
+                    false
+                };
+                // leading ']' is literal
+                if i < p.len() && p[i] == ']' {
+                    // handled below as normal char check? treat literal
+                    // We'll process as a char match
+                }
+                let mut matched = false;
+                // handle literal leading ]
+                if i < p.len() && p[i] == ']' {
+                    if t[0] == ']' {
+                        matched = true;
+                    }
+                    i += 1;
+                }
+                while i < p.len() && p[i] != ']' {
+                    if i + 2 < p.len() && p[i + 1] == '-' {
+                        // range i..i+2 (need i+2 valid)
+                        if i + 2 < p.len() {
+                            let lo = p[i];
+                            let hi = p[i + 2];
+                            if t[0] >= lo && t[0] <= hi {
+                                matched = true;
+                            }
+                            i += 3;
+                            continue;
+                        }
+                    }
+                    if p[i] == t[0] {
+                        matched = true;
+                    }
+                    i += 1;
+                }
+                if i >= p.len() {
+                    // no closing bracket: treat '[' literally
+                    return t[0] == '[' && rec(&p[1..], &t[1..]);
+                }
+                if neg {
+                    matched = !matched;
+                }
+                if matched {
+                    rec(&p[i + 1..], &t[1..])
+                } else {
+                    false
+                }
+            }
+            c => !t.is_empty() && c == t[0] && rec(&p[1..], &t[1..]),
+        }
+    }
+    rec(&p, &t)
+}
+
+fn match_components(pattern: &[&str], text: &[&str]) -> bool {
+    if pattern.is_empty() {
+        return text.is_empty();
+    }
+    if pattern[0] == "**" {
+        if pattern.len() == 1 {
+            return true;
+        }
+        for i in 0..=text.len() {
+            if match_components(&pattern[1..], &text[i..]) {
+                return true;
+            }
+        }
+        false
+    } else {
+        if text.is_empty() {
+            return false;
+        }
+        if match_component(pattern[0], text[0]) {
+            match_components(&pattern[1..], &text[1..])
+        } else {
+            false
+        }
+    }
+}
+
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<&str> = if pattern.is_empty() {
+        vec![]
+    } else {
+        pattern.split('/').collect()
+    };
+    let t: Vec<&str> = if text.is_empty() {
+        vec![]
+    } else {
+        text.split('/').collect()
+    };
+    match_components(&p, &t)
+}
+
 /// Expand a list of format targets (files and/or directories) into a sorted,
 /// deduplicated list of markdown files. Directories expand to their
 /// top-level `.md` files, or recursively via [`sorted_md_tree`] when
-/// `recursive` is set.
+/// `recursive` is set. `excludes` drops matching targets via
+/// [`is_excluded`] (an excluded directory is pruned before descending).
 ///
 /// PATHs are literal filesystem paths: no glob interpretation is applied
 /// (`*` and `**` may be part of a real filename). Shell expansion (quoting,
 /// `globstar`, etc.) is the shell's job — `plan` only ever sees the paths
 /// it is given. Read errors for a directory and non-file/non-dir inputs are
 /// collected into the returned error vector instead of aborting.
-pub fn expand_format_targets(paths: &[PathBuf], recursive: bool) -> (Vec<PathBuf>, Vec<String>) {
+pub fn expand_format_targets(
+    paths: &[PathBuf],
+    excludes: &[String],
+    recursive: bool,
+) -> (Vec<PathBuf>, Vec<String>) {
     let mut targets: Vec<PathBuf> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for p in paths {
         if p.is_dir() {
             let entries = if recursive {
-                sorted_md_tree(p)
+                sorted_md_tree(p, excludes)
             } else {
                 sorted_md_entries(p)
             };
             match entries {
-                Ok(entries) => targets.extend(entries),
+                Ok(entries) => {
+                    targets.extend(entries.into_iter().filter(|e| !is_excluded(e, excludes)))
+                }
                 Err(e) => errors.push(e),
             }
         } else if p.is_file() {
-            targets.push(p.clone());
+            if !is_excluded(p, excludes) {
+                targets.push(p.clone());
+            }
         } else {
             errors.push(format!("{}: not a file or directory", p.display()));
         }
@@ -575,7 +741,7 @@ mod entries_tests {
         ] {
             std::fs::write(tmp.path().join(name), "x").unwrap();
         }
-        let got = sorted_md_tree(tmp.path()).expect("readable");
+        let got = sorted_md_tree(tmp.path(), &[]).expect("readable");
         let rels: Vec<String> = got
             .iter()
             .map(|p| {
@@ -596,7 +762,7 @@ mod entries_tests {
         std::fs::write(tmp.path().join("real/a.md"), "x").unwrap();
         // Symlink loop: link inside real/ pointing back at the tmp root.
         std::os::unix::fs::symlink(tmp.path(), tmp.path().join("real/loop")).unwrap();
-        let got = sorted_md_tree(tmp.path()).expect("readable");
+        let got = sorted_md_tree(tmp.path(), &[]).expect("readable");
         assert_eq!(got.len(), 1, "loop must not recurse: {got:?}");
         assert!(got[0].ends_with("real/a.md"));
     }
@@ -609,7 +775,8 @@ mod entries_tests {
         }
         let dir = tmp.path().to_path_buf();
         let file = dir.join("a.md");
-        let (targets, errors) = super::expand_format_targets(&[dir.clone(), file.clone()], false);
+        let (targets, errors) =
+            super::expand_format_targets(&[dir.clone(), file.clone()], &[], false);
         assert!(errors.is_empty(), "no errors: {errors:?}");
         let names: Vec<String> = targets
             .iter()
@@ -624,7 +791,7 @@ mod entries_tests {
         std::fs::write(tmp.path().join("a.md"), "x").unwrap();
         let missing = tmp.path().join("nope");
         let (targets, errors) =
-            super::expand_format_targets(&[missing.clone(), tmp.path().to_path_buf()], false);
+            super::expand_format_targets(&[missing.clone(), tmp.path().to_path_buf()], &[], false);
         assert!(!errors.is_empty(), "missing path must error");
         assert!(
             errors.iter().any(|e| e.contains("nope")),
@@ -637,7 +804,7 @@ mod entries_tests {
     fn expand_format_targets_unreadable_dir_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let missing_dir = tmp.path().join("nope");
-        let (targets, errors) = super::expand_format_targets(&[missing_dir.clone()], false);
+        let (targets, errors) = super::expand_format_targets(&[missing_dir.clone()], &[], false);
         assert!(targets.is_empty());
         assert!(!errors.is_empty());
         assert!(errors[0].contains("nope"));
@@ -651,7 +818,7 @@ mod entries_tests {
         // literal path, not a pattern.
         let literal = tmp.path().join("star*.md");
         std::fs::write(&literal, "x").unwrap();
-        let (targets, errors) = super::expand_format_targets(&[literal.clone()], false);
+        let (targets, errors) = super::expand_format_targets(&[literal.clone()], &[], false);
         assert!(errors.is_empty(), "literal path must resolve: {errors:?}");
         assert_eq!(targets, vec![literal]);
     }
@@ -663,11 +830,83 @@ mod entries_tests {
         std::fs::write(tmp.path().join("top.md"), "x").unwrap();
         std::fs::write(tmp.path().join("sub/nested.md"), "x").unwrap();
         let dir = tmp.path().to_path_buf();
-        let (shallow, errors) = super::expand_format_targets(&[dir.clone()], false);
+        let (shallow, errors) = super::expand_format_targets(&[dir.clone()], &[], false);
         assert!(errors.is_empty(), "no errors: {errors:?}");
         assert_eq!(shallow.len(), 1, "shallow sees top level only");
-        let (deep, errors) = super::expand_format_targets(&[dir], true);
+        let (deep, errors) = super::expand_format_targets(&[dir], &[], true);
         assert!(errors.is_empty(), "no errors: {errors:?}");
         assert_eq!(deep.len(), 2, "recursive sees the subtree");
+    }
+
+    #[test]
+    fn expand_format_targets_exclude_prunes_subdirectory() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("keep")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("skip")).unwrap();
+        for name in ["keep/a.md", "skip/b.md", "top.md"] {
+            std::fs::write(tmp.path().join(name), "x").unwrap();
+        }
+        let excl = ["skip".to_string()];
+        let (targets, errors) =
+            super::expand_format_targets(&[tmp.path().to_path_buf()], &excl, true);
+        assert!(errors.is_empty(), "no errors: {errors:?}");
+        let rels: Vec<String> = targets
+            .iter()
+            .map(|p| {
+                p.strip_prefix(tmp.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(rels, vec!["keep/a.md", "top.md"]);
+    }
+
+    #[test]
+    fn expand_format_targets_exclude_matches_filenames() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["a.md", "b.gen.md"] {
+            std::fs::write(tmp.path().join(name), "x").unwrap();
+        }
+        let excl = ["*.gen.md".to_string()];
+        let (targets, errors) =
+            super::expand_format_targets(&[tmp.path().to_path_buf()], &excl, false);
+        assert!(errors.is_empty(), "no errors: {errors:?}");
+        let names: Vec<String> = targets
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["a.md"]);
+    }
+
+    #[test]
+    fn expand_format_targets_exclude_applies_to_explicit_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("a.md");
+        std::fs::write(&file, "x").unwrap();
+        let excl = ["a.md".to_string()];
+        let (targets, errors) = super::expand_format_targets(&[file], &excl, false);
+        assert!(
+            errors.is_empty(),
+            "excluded file is skipped, not an error: {errors:?}"
+        );
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn expand_format_targets_exclude_with_slash_matches_full_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("draft")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("final")).unwrap();
+        for name in ["draft/a.md", "final/b.md"] {
+            std::fs::write(tmp.path().join(name), "x").unwrap();
+        }
+        let pattern = format!("{}/draft/**", tmp.path().to_string_lossy());
+        let excl = [pattern];
+        let (targets, errors) =
+            super::expand_format_targets(&[tmp.path().to_path_buf()], &excl, true);
+        assert!(errors.is_empty(), "no errors: {errors:?}");
+        assert_eq!(targets.len(), 1, "only final/b.md survives: {targets:?}");
+        assert!(targets[0].ends_with("final/b.md"));
     }
 }

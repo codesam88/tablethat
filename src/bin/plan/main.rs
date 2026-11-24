@@ -166,6 +166,9 @@ enum Commands {
             help = "Files or directories to format (default: .plan/*.md)"
         )]
         paths: Vec<PathBuf>,
+        /// Exclude targets (repeatable globs; quote them so the shell passes them through)
+        #[arg(long, value_name = "GLOB")]
+        exclude: Vec<String>,
         /// Recurse into subdirectories for directory PATHs
         #[arg(long)]
         recursive: bool,
@@ -340,6 +343,7 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Some(Commands::Format {
             paths,
+            exclude,
             recursive,
             width,
             reflow,
@@ -403,7 +407,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 }
             } else {
                 let (targets, mut errors) =
-                    tablethat_lib::plan::store::expand_format_targets(&paths, recursive);
+                    tablethat_lib::plan::store::expand_format_targets(&paths, &exclude, recursive);
                 let mut would_change = 0usize;
                 for entry in &targets {
                     let is_task = entry.components().any(|c| c.as_os_str() == ".plan");

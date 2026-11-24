@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `plan format`: repeatable `--exclude GLOB` drops matching targets
+  (bare patterns match any path component, slash patterns match full
+  paths; excluded directories are pruned before descending)
 - `plan format`: `--recursive` descends into subdirectories for directory
   PATHs (directories expand top-level by default)
 
