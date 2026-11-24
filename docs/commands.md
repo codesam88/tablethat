@@ -56,9 +56,13 @@ before.
 `format [PATH]...`: with files/directories, format each (directories expand to
 their `.md` files); with no path, normalize every task in the workspace.
 Glob patterns are supported, including `**` for recursive matches (e.g.
-`path/**/*.md`); a pattern with no matches is an error. Multiple paths are
-deduplicated (a file given twice or contained in a given directory is
-processed once); targets are sorted before processing.
+`path/**/*.md`); a pattern with no matches is an error. Quote the pattern
+(`plan format "docs/**/*.md"`) so the shell passes it through: an unquoted
+`docs/**/*.md` is expanded by the shell first (bash without `globstar`
+expands `**` as single-level `*`), and `plan` then only sees the files the
+shell matched. Multiple paths are deduplicated (a file given twice or
+contained in a given directory is processed once); targets are sorted before
+processing.
 - Task path (files under `<root>/.plan/`, or the no-path whole tree): applies
   canonical field ordering (`status`/`type`/`priority`/`area` first) and
   re-emits multi-line values in block style. A split failure (unclosed `---`)

@@ -160,10 +160,10 @@ enum Commands {
     },
     /// Format task markdown (frontmatter + body)
     Format {
-        /// Files or directories to format (default: .plan/*.md)
+        /// Files, directories, or quoted globs (e.g. "path/**/*.md")
         #[arg(
             value_name = "PATH",
-            help = "Files or directories to format (default: .plan/*.md)"
+            help = "Files, directories, or quoted globs (e.g. \"path/**/*.md\"; default: .plan/*.md)"
         )]
         paths: Vec<PathBuf>,
         /// Wrap width for markdown body (default: 78)
