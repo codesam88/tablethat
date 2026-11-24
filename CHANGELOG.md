@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `plan format`: `--recursive` descends into subdirectories for directory
+  PATHs (directories expand top-level by default)
+
+### Removed
+
+- `plan format` PATH no longer interprets `*`/`**` itself (they may be part
+  of a real filename); shell expansion applies as with any command
+
 ## [0.2.4] – 2026-11-23
 
 ### Added

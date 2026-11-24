@@ -166,6 +166,9 @@ enum Commands {
             help = "Files or directories to format (default: .plan/*.md)"
         )]
         paths: Vec<PathBuf>,
+        /// Recurse into subdirectories for directory PATHs
+        #[arg(long)]
+        recursive: bool,
         /// Wrap width for markdown body (default: 78)
         #[arg(short, long, value_name = "COLS")]
         width: Option<usize>,
@@ -337,6 +340,7 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Some(Commands::Format {
             paths,
+            recursive,
             width,
             reflow,
             no_reflow,
@@ -399,7 +403,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 }
             } else {
                 let (targets, mut errors) =
-                    tablethat_lib::plan::store::expand_format_targets(&paths);
+                    tablethat_lib::plan::store::expand_format_targets(&paths, recursive);
                 let mut would_change = 0usize;
                 for entry in &targets {
                     let is_task = entry.components().any(|c| c.as_os_str() == ".plan");
