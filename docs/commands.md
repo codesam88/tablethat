@@ -58,7 +58,12 @@ their top-level `.md` files; `--recursive` descends into subdirectories);
 with no path, normalize every task in the workspace.
 PATHs are literal: no glob interpretation is applied (`*` and `**` may be
 part of a real filename) — shell expansion (quoting, `globstar`, etc.) is
-the shell's job. Multiple paths are
+the shell's job. Repeatable `--exclude GLOB` drops matching targets (quote
+them so the shell passes them through): a pattern without `/` matches any
+path component, so `--exclude target` prunes a `target/` subtree, while
+`--exclude "*.gen.md"` skips filenames and `--exclude "docs/draft/**"`
+skips a path prefix. An excluded directory is not descended into;
+explicitly listed files that match are skipped silently. Multiple paths are
 deduplicated (a file given twice or contained in a given directory is
 processed once); targets are sorted before processing.
 - Task path (files under `<root>/.plan/`, or the no-path whole tree): applies
