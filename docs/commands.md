@@ -54,9 +54,11 @@ skipped silently in schemaless mode; in schema mode they are validated as
 before.
 
 `format [PATH]...`: with files/directories, format each (directories expand to
-their `.md` files); with no path, normalize every task in the workspace.
-Glob patterns are supported, including `**` for recursive matches (e.g.
-`path/**/*.md`); a pattern with no matches is an error. Multiple paths are
+their top-level `.md` files; `--recursive` descends into subdirectories);
+with no path, normalize every task in the workspace.
+PATHs are literal: no glob interpretation is applied (`*` and `**` may be
+part of a real filename) — shell expansion (quoting, `globstar`, etc.) is
+the shell's job. Multiple paths are
 deduplicated (a file given twice or contained in a given directory is
 processed once); targets are sorted before processing.
 - Task path (files under `<root>/.plan/`, or the no-path whole tree): applies
